@@ -1,0 +1,8 @@
+{
+  "name": "Remix nutrifacts",
+  "description": "Nutrifacts with dt.Anchal — Personalized Nutrition \u0026 Diet Care. Connect with patients, provide personalized diet charts, track weight progress, and manage consultations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

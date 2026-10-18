@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+/*
+ * Brand fonts are served by the app itself and preloaded in index.html, so they are ready before
+ * the first paint. font-display: block means text is never drawn in a fallback font first and then
+ * swapped (that swap looked like a "zoom" on refresh); since the files are local and cached, the
+ * brief wait before text appears is only noticeable on a very slow first visit.
+ */
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: block;
+  src: url('/fonts/plus-jakarta-sans-latin-wght-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: italic;
+  font-weight: 200 800;
+  font-display: block;
+  src: url('/fonts/plus-jakarta-sans-latin-wght-italic.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Playfair Display';
+  font-style: normal;
+  font-weight: 400 900;
+  font-display: block;
+  src: url('/fonts/playfair-display-latin-wght-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Playfair Display';
+  font-style: italic;
+  font-weight: 400 900;
+  font-display: block;
+  src: url('/fonts/playfair-display-latin-wght-italic.woff2') format('woff2');
+}
