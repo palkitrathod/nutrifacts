@@ -30,6 +30,17 @@ The dietitian login comes from `ADMIN_EMAIL` / `ADMIN_PASSWORD` in `.env.product
 Run behind HTTPS (session cookies are `Secure` in production). See `.env.example` for all settings.
 Data is stored in SQLite at `data/nutrifacts.db` — back this file up.
 
+## Deploy on Render
+
+The repo includes `render.yaml` (one web service + a 1 GB persistent disk for the database).
+
+1. In Render: **New → Blueprint**, connect GitHub, pick this repository.
+2. Enter `ADMIN_EMAIL` and `ADMIN_PASSWORD` (the dietitian's login) when asked.
+3. Create. Render builds (`npm ci --include=dev && npm run build`) and starts (`npm start`).
+
+Pushing to `main` redeploys automatically. Persistent disks need a paid instance (Starter).
+Sample accounts are off in production; the price list is seeded on first start.
+
 ## Tests
 
 ```bash
