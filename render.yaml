@@ -1,0 +1,35 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# One web service runs both the API and the built site. The SQLite database lives on a
+# persistent disk so accounts and data survive deploys and restarts.
+services:
+  - type: web
+    name: nutrifacts
+    runtime: node
+    plan: starter # persistent disks need a paid instance
+    region: singapore # closest Render region to India
+    branch: main
+    autoDeploy: true
+    # Dev dependencies (Vite, Tailwind, TypeScript) are needed to build the site.
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/packages
+    disk:
+      name: nutrifacts-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 22.19.0
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_PATH
+        value: /var/data/nutrifacts.db
+      # Render puts one proxy in front of the app (needed for https detection and client IPs).
+      - key: TRUST_PROXY
+        value: "1"
+      # The dietitian's login. Entered in the Render dashboard when creating the service;
+      # never stored in the repository.
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
