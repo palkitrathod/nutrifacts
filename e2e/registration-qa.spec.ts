@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { verifyInBrowser } from './mail';
 
 // Detailed QA of the registration and sign-in forms: every validation rule, error behaviour,
 // normalisation of what is stored, resilience (double submit, slow / failing / offline network),
@@ -227,6 +228,7 @@ test.describe('registration — submitting', () => {
     const { user } = await (await resp).json();
     expect(user).toMatchObject({ name: 'Meera Iyer', email: `${local}@example.com`, phone: '+919876543210', role: 'patient' });
 
+    await verifyInBrowser(page, user.email);
     await expect(page).toHaveURL('/app');
     expect(page.url()).not.toContain('Healthy123');
     await page.getByTitle(/Logged in as/).click();
@@ -256,7 +258,7 @@ test.describe('registration — submitting', () => {
       await route.continue();
     });
     await f(page).submit.dblclick();
-    await expect(page).toHaveURL('/app');
+    await expect(page).toHaveURL('/verify-email?next=%2Fapp');
     expect(count).toBe(1);
   });
 
@@ -264,7 +266,7 @@ test.describe('registration — submitting', () => {
     await page.goto('/signup');
     await fillValid(page);
     await f(page).confirm.press('Enter');
-    await expect(page).toHaveURL('/app');
+    await expect(page).toHaveURL('/verify-email?next=%2Fapp');
   });
 
   test('while saving, the button is disabled and says so', async ({ page }) => {
@@ -276,7 +278,7 @@ test.describe('registration — submitting', () => {
     });
     await f(page).submit.click();
     await expect(page.getByRole('button', { name: /creating your account/i })).toBeDisabled();
-    await expect(page).toHaveURL('/app');
+    await expect(page).toHaveURL('/verify-email?next=%2Fapp');
   });
 
   test('a server error shows a friendly message and keeps everything typed; retry works', async ({ page }) => {
@@ -293,7 +295,7 @@ test.describe('registration — submitting', () => {
     await expect(f(page).email).toHaveValue(email);
     fail = false;
     await f(page).submit.click();
-    await expect(page).toHaveURL('/app');
+    await expect(page).toHaveURL('/verify-email?next=%2Fapp');
   });
 
   test('offline: says the connection failed', async ({ page, context }) => {
@@ -320,7 +322,7 @@ test.describe('registration — submitting', () => {
     await page.goto('/signup');
     await fillValid(page);
     await f(page).submit.click();
-    await expect(page).toHaveURL('/app');
+    await expect(page).toHaveURL('/verify-email?next=%2Fapp');
     await page.goBack();
     await expect(page.getByRole('heading', { name: 'Create your account' })).toHaveCount(0);
   });
@@ -386,7 +388,7 @@ test.describe('registration — layout & accessibility', () => {
     await page.keyboard.press('Space');
     await expect(x.terms).toBeChecked();
     await x.terms.press('Enter'); // Enter in a form field submits
-    await expect(page).toHaveURL('/app');
+    await expect(page).toHaveURL('/verify-email?next=%2Fapp');
   });
 
   test('sign-in: Tab goes from email straight to password', async ({ page }) => {

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   Calendar,
+  Info,
   ChevronRight,
   Star,
   Award,
@@ -24,6 +25,9 @@ import {
 import { Link, useLocation } from 'react-router';
 import { IMAGES, NUTRITION_SERVICES } from '../data/mockData';
 import { usePublicPackages } from '../data/usePublicPackages';
+import { PlanCard, WinWinStrip, planFamilies } from '../components/PlanCard';
+import { CLINICAL_DISCLAIMER, SERVICE_GROUPS, ServiceCard, ServiceDetailsDialog, ServiceGroupTabs } from '../components/ServiceCatalog';
+import type { NutritionService, ServiceGroup } from '../types/nutrition';
 import { ServiceIcon, serviceTheme } from '../components/ServiceIcon';
 import { useAuth } from '../auth/AuthContext';
 
@@ -90,10 +94,24 @@ export const LandingPage: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const heroRef = useRef<HTMLDivElement>(null);
-  const { status } = useAuth();
+  const { status, user } = useAuth();
   const location = useLocation();
-  const signedIn = status === 'authenticated';
+  // Sign-up isn't finished until the emailed code is entered: until then, no dashboard link.
+  const signedIn = status === 'authenticated' && !!user?.emailVerified;
   const { packages: livePackages, failed: pricingFailed } = usePublicPackages();
+  const [serviceGroup, setServiceGroup] = useState<ServiceGroup>('everyday');
+  const [lengthChoice, setLengthChoice] = useState<Record<string, string>>({});
+  const [openService, setOpenService] = useState<NutritionService | null>(null);
+  /** Booking a program (with the length picked on its card, e.g. "Lifestyle Diseases (3 months)"). */
+  const serviceAction = (svc: NutritionService, where: 'card' | 'dialog', months = 1) => (
+    <Link
+      to={signedIn ? '/app' : `/signup?service=${encodeURIComponent(svc.id)}`}
+      state={signedIn ? { bookService: months > 1 ? `${svc.title} (${months} months)` : svc.title } : undefined}
+      className={`py-2 rounded-xl text-xs font-semibold bg-[#3E6553] hover:bg-[#2D4C3C] text-white flex items-center justify-center gap-1 ${where === 'dialog' ? 'px-5 py-2.5' : ''}`}
+    >
+      {svc.assessmentFirst ? 'Book assessment' : 'Book this program'} <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
+    </Link>
+  );
 
   // Layout effect: decided before the first paint, so after a refresh mid-page the navbar doesn't
   // flash transparent and then turn white.
@@ -128,7 +146,7 @@ export const LandingPage: React.FC = () => {
           ? 'bg-white/95 backdrop-blur-md shadow-md border-b border-emerald-100'
           : 'bg-transparent'
       }`}>
-        <div className="max-w-6xl mx-auto px-5 py-3.5 flex items-center justify-between gap-4">
+        <div className="max-w-6xl 2xl:max-w-7xl mx-auto px-5 sm:px-8 py-3.5 flex items-center justify-between gap-4">
           {/* Logo */}
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-[#3E6553] flex items-center justify-center text-xl shadow-sm">
@@ -268,7 +286,7 @@ export const LandingPage: React.FC = () => {
         <div className="absolute inset-0 opacity-5"
              style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '32px 32px' }} />
 
-        <div className="relative z-10 max-w-6xl mx-auto px-5 py-32 lg:py-40 w-full">
+        <div className="relative z-10 max-w-6xl 2xl:max-w-7xl mx-auto px-5 sm:px-8 py-28 lg:py-32 w-full">
           <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
             {/* Left — headline */}
             <div className="space-y-7">
@@ -278,12 +296,12 @@ export const LandingPage: React.FC = () => {
               </div>
 
               <div>
-                <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-white leading-tight"
+                <h1 className="text-4xl sm:text-5xl lg:text-6xl 2xl:text-7xl font-bold text-white leading-tight"
                     style={{ fontFamily: "'Playfair Display', serif" }}>
                   Nourish Better.<br />
                   <span className="text-emerald-300 italic">Live Healthier.</span>
                 </h1>
-                <p className="mt-5 text-emerald-100/85 text-base sm:text-lg leading-relaxed max-w-lg">
+                <p className="mt-5 text-emerald-100/85 text-base sm:text-lg 2xl:text-xl leading-relaxed max-w-lg 2xl:max-w-xl">
                   Personalised clinical diet charts, science-backed nutrition protocols, and continuous support from{' '}
                   <strong className="text-white font-semibold">Dt. Anchal Dewan</strong>, M.Sc. Clinical Nutrition & Dietetics — all without crash diets or hunger pangs.
                 </p>
@@ -380,7 +398,7 @@ export const LandingPage: React.FC = () => {
 
       {/* ══ STATS STRIP ════════════════════════════════════════════════ */}
       <section className="bg-[#2D4C3C] py-10">
-        <div className="max-w-5xl mx-auto px-5">
+        <div className="max-w-5xl 2xl:max-w-6xl mx-auto px-5 sm:px-8">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
             {STATS.map(s => (
               <div key={s.label} className="text-center space-y-1">
@@ -395,63 +413,45 @@ export const LandingPage: React.FC = () => {
 
       {/* ══ SERVICES ═══════════════════════════════════════════════════ */}
       <section id="services" className="scroll-mt-16 py-20 lg:py-28 bg-[#F7FAF8]">
-        <div className="max-w-6xl mx-auto px-5">
+        <div className="max-w-6xl 2xl:max-w-7xl mx-auto px-5 sm:px-8">
           {/* Header */}
-          <div className="text-center mb-14">
+          <div className="text-center mb-10">
             <span className="inline-block text-[#3E6553] text-xs font-bold tracking-widest uppercase mb-3 bg-emerald-50 px-4 py-1.5 rounded-full border border-emerald-200">
-              Clinical Nutrition Services
+              Nutrition Programs
             </span>
             <h2 className="text-3xl sm:text-4xl font-bold text-[#2D4C3C] mt-2"
                 style={{ fontFamily: "'Playfair Display', serif" }}>
-              Specialised Care for Every Condition
+              15 Programs, One Personal Approach
             </h2>
             <p className="mt-4 text-slate-500 max-w-xl mx-auto text-sm leading-relaxed">
-              From PCOS and Diabetes to Thyroid and Weight Management — Dt. Anchal brings clinical expertise to your plate.
+              From everyday habits to clinical conditions: every program is built around your goals, food preferences, routine and reports.
             </p>
           </div>
 
-          {/* Service grid */}
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {NUTRITION_SERVICES.map((svc) => {
-              const theme = serviceTheme(svc.iconName);
-              return (
-                <div
-                  key={svc.id}
-                  className={`bg-white rounded-2xl border ${theme.border} p-5 hover:shadow-md transition-shadow duration-200 group`}
-                >
-                  <div className={`w-12 h-12 rounded-xl ${theme.badge} flex items-center justify-center mb-4`}>
-                    <ServiceIcon iconName={svc.iconName} className="w-6 h-6" />
-                  </div>
-                  <h3 className="text-slate-900 font-bold text-base mb-1">{svc.title}</h3>
-                  <p className="text-[#3E6553] text-xs font-semibold mb-2">{svc.subtitle}</p>
-                  <p className="text-slate-500 text-xs leading-relaxed mb-4">{svc.tagline}</p>
-                  <div className="flex items-start justify-between gap-3 pt-3 border-t border-slate-100">
-                    <div className="shrink-0">
-                      <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wide block">Starting from</span>
-                      <span className="text-[#3E6553] font-bold text-sm font-mono whitespace-nowrap">{svc.priceDisplay}</span>
-                    </div>
-                    <span className="text-[11px] text-slate-400 text-right min-w-0 pt-3.5 leading-snug">
-                      <Clock className="w-3 h-3 inline-block align-[-2px] mr-1" aria-hidden="true" />
-                      {svc.duration}
-                    </span>
-                  </div>
-                  <Link
-                    to={signedIn ? '/app' : `/signup?service=${encodeURIComponent(svc.id)}`}
-                    state={signedIn ? { bookService: svc.title } : undefined}
-                    className="mt-3 w-full py-2 rounded-xl text-[#3E6553] text-xs font-semibold border border-emerald-200 hover:bg-emerald-50 transition-colors flex items-center justify-center gap-1"
-                  >
-                    Book this service <ChevronRight className="w-3.5 h-3.5" />
-                  </Link>
-                </div>
-              );
-            })}
+          <ServiceGroupTabs value={serviceGroup} onChange={setServiceGroup} services={NUTRITION_SERVICES} className="justify-start lg:justify-center mb-3" />
+          <p className="text-center text-xs text-slate-500 mb-8">{SERVICE_GROUPS.find((g) => g.id === serviceGroup)?.blurb}</p>
+
+          {/* Program grid */}
+          <div id={`programs-${serviceGroup}`} role="tabpanel" aria-labelledby={`programs-tab-${serviceGroup}`} className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {NUTRITION_SERVICES.filter((svc) => svc.group === serviceGroup).map((svc) => (
+              <ServiceCard key={svc.id} svc={svc} onDetails={() => setOpenService(svc)} action={(months) => serviceAction(svc, 'card', months)} />
+            ))}
           </div>
+
+          <p className="mt-8 max-w-3xl mx-auto flex items-start gap-2 text-[11px] text-slate-400 leading-relaxed">
+            <Info className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
+            <span>{CLINICAL_DISCLAIMER}</span>
+          </p>
         </div>
       </section>
 
+      {openService && (
+        <ServiceDetailsDialog svc={openService} onClose={() => setOpenService(null)} action={serviceAction(openService, 'dialog')} />
+      )}
+
       {/* ══ ABOUT / DIETITIAN ═════════════════════════════════════════ */}
       <section id="about" className="scroll-mt-16 py-20 lg:py-28 bg-white">
-        <div className="max-w-6xl mx-auto px-5">
+        <div className="max-w-6xl 2xl:max-w-7xl mx-auto px-5 sm:px-8">
           <div className="grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
             {/* Image side */}
             <div className="relative">
@@ -541,7 +541,7 @@ export const LandingPage: React.FC = () => {
 
       {/* ══ HOW IT WORKS ══════════════════════════════════════════════ */}
       <section id="how-it-works" className="scroll-mt-16 py-20 lg:py-28 bg-[#F7FAF8]">
-        <div className="max-w-5xl mx-auto px-5">
+        <div className="max-w-5xl 2xl:max-w-6xl mx-auto px-5 sm:px-8">
           <div className="text-center mb-14">
             <span className="inline-block text-[#3E6553] text-xs font-bold tracking-widest uppercase mb-3 bg-emerald-50 px-4 py-1.5 rounded-full border border-emerald-200">
               Simple Process
@@ -584,8 +584,8 @@ export const LandingPage: React.FC = () => {
 
       {/* ══ PRICING ════════════════════════════════════════════════════ */}
       <section id="pricing" className="scroll-mt-16 py-20 lg:py-28 bg-white">
-        <div className="max-w-5xl mx-auto px-5">
-          <div className="text-center mb-14">
+        <div className="max-w-6xl 2xl:max-w-7xl mx-auto px-5 sm:px-8">
+          <div className="text-center mb-10">
             <span className="inline-block text-[#3E6553] text-xs font-bold tracking-widest uppercase mb-3 bg-emerald-50 px-4 py-1.5 rounded-full border border-emerald-200">
               Transparent Pricing
             </span>
@@ -594,80 +594,48 @@ export const LandingPage: React.FC = () => {
               Simple, Affordable Plans
             </h2>
             <p className="mt-4 text-slate-500 text-sm max-w-md mx-auto">
-              No hidden fees. No automatic renewals. Pay only for what you need.
+              Start small and move up when you're ready: every step is credited, nothing is wasted.
             </p>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-6">
+          <WinWinStrip className="mb-10" />
+
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 pt-3">
             {!livePackages && !pricingFailed && [0, 1, 2].map(i => (
-              <div key={i} className="rounded-2xl border border-slate-200 p-6 min-h-[550px] md:min-h-[720px] lg:min-h-[550px] animate-pulse bg-slate-50" aria-hidden="true" />
+              <div key={i} className="rounded-2xl border border-slate-200 p-6 min-h-[600px] lg:min-h-[700px] animate-pulse bg-slate-50" aria-hidden="true" />
             ))}
             {pricingFailed && (
-              <p className="md:col-span-3 text-center text-sm text-slate-500" role="status">
+              <p className="md:col-span-2 lg:col-span-3 text-center text-sm text-slate-500" role="status">
                 Plans couldn't be loaded right now. Message us on{' '}
                 <a href="https://wa.me/919872154320" target="_blank" rel="noopener noreferrer" className="text-[#3E6553] font-semibold underline">WhatsApp</a>{' '}
                 for current pricing.
               </p>
             )}
-            {livePackages?.map(pkg => (
-              <div
-                key={pkg.id}
-                className={`rounded-2xl border p-6 flex flex-col relative min-h-[550px] md:min-h-[720px] lg:min-h-[550px] transition-[box-shadow,border-color] duration-200 ${
-                  pkg.isPopular
-                    ? 'bg-[#2D4C3C] border-[#3E6553] text-white shadow-2xl scale-[1.03]'
-                    : 'bg-white border-slate-200 hover:border-emerald-200 hover:shadow-md'
-                }`}
-              >
-                {pkg.isPopular && (
-                  <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-amber-400 text-amber-900 text-[10px] font-bold uppercase tracking-widest px-4 py-1 rounded-full shadow-md">
-                    ✦ Most Recommended
-                  </div>
-                )}
-
-                <div className="mb-5">
-                  <p className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${pkg.isPopular ? 'text-emerald-300' : 'text-[#3E6553]'}`}>
-                    {pkg.durationLabel}
-                  </p>
-                  <h3 className={`text-lg font-bold mb-1 ${pkg.isPopular ? 'text-white' : 'text-slate-900'}`}>
-                    {pkg.title}
-                  </h3>
-                  <p className={`text-xs leading-relaxed ${pkg.isPopular ? 'text-emerald-200/80' : 'text-slate-500'}`}>
-                    {pkg.tagline}
-                  </p>
-                </div>
-
-                <div className="mb-5">
-                  <span className={`text-4xl font-bold ${pkg.isPopular ? 'text-white' : 'text-[#2D4C3C]'}`}
-                        style={{ fontFamily: "'Playfair Display', serif" }}>
-                    ₹{pkg.priceInr.toLocaleString('en-IN')}
-                  </span>
-                  <span className={`text-sm ml-1 ${pkg.isPopular ? 'text-emerald-300' : 'text-slate-400'}`}>
-                    incl. all taxes
-                  </span>
-                </div>
-
-                <ul className="space-y-2.5 mb-6 flex-1">
-                  {pkg.inclusions.map(inc => (
-                    <li key={inc} className="flex gap-2.5 text-xs">
-                      <CheckCircle2 className={`w-4 h-4 shrink-0 mt-0.5 ${pkg.isPopular ? 'text-emerald-300' : 'text-[#3E6553]'}`} />
-                      <span className={pkg.isPopular ? 'text-emerald-100' : 'text-slate-600'}>{inc}</span>
-                    </li>
-                  ))}
-                </ul>
-
-                <Link
-                  to={signedIn ? '/app' : `/signup?plan=${encodeURIComponent(pkg.id)}`}
-                  state={signedIn ? { openTab: 'plans' } : undefined}
-                  className={`w-full py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 ${
-                    pkg.isPopular
-                      ? 'bg-white text-[#2D4C3C] hover:bg-emerald-50'
-                      : 'bg-[#3E6553] text-white hover:bg-[#2D4C3C]'
-                  }`}
-                >
-                  Choose this plan <ArrowRight className="w-4 h-4" />
-                </Link>
-              </div>
-            ))}
+            {livePackages && planFamilies(livePackages).map(family => {
+              const pkg = family.find(p => p.id === lengthChoice[family[0].id]) ?? family.find(p => p.bundleOf?.months === 3) ?? family[0];
+              return (
+              <PlanCard
+                key={family[0].id}
+                pkg={pkg}
+                all={livePackages}
+                family={family}
+                onSelectLength={p => setLengthChoice(c => ({ ...c, [family[0].id]: p.id }))}
+                dark={family.some(p => p.isPopular)}
+                className="lg:min-h-[700px]"
+                footer={
+                  <Link
+                    to={signedIn ? '/app' : `/signup?plan=${encodeURIComponent(pkg.id)}`}
+                    state={signedIn ? { openTab: 'plans' } : undefined}
+                    className={`w-full py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 ${
+                      family.some(p => p.isPopular) ? 'bg-white text-[#2D4C3C] hover:bg-emerald-50' : 'bg-[#3E6553] text-white hover:bg-[#2D4C3C]'
+                    }`}
+                  >
+                    Choose this plan <ArrowRight className="w-4 h-4" />
+                  </Link>
+                }
+              />
+              );
+            })}
           </div>
 
           <p className="text-center text-xs text-slate-400 mt-8">
@@ -678,7 +646,7 @@ export const LandingPage: React.FC = () => {
 
       {/* ══ TESTIMONIALS ══════════════════════════════════════════════ */}
       <section className="py-20 lg:py-28 bg-[#F7FAF8]">
-        <div className="max-w-5xl mx-auto px-5">
+        <div className="max-w-5xl 2xl:max-w-6xl mx-auto px-5 sm:px-8">
           <div className="text-center mb-14">
             <span className="inline-block text-[#3E6553] text-xs font-bold tracking-widest uppercase mb-3 bg-emerald-50 px-4 py-1.5 rounded-full border border-emerald-200">
               Patient Stories
@@ -747,7 +715,7 @@ export const LandingPage: React.FC = () => {
 
       {/* ══ FOOTER ════════════════════════════════════════════════════ */}
       <footer className="bg-[#1C3328] py-12">
-        <div className="max-w-6xl mx-auto px-5">
+        <div className="max-w-6xl 2xl:max-w-7xl mx-auto px-5 sm:px-8">
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-8 mb-10">
             {/* Brand */}
             <div className="sm:col-span-2 lg:col-span-1 space-y-3">

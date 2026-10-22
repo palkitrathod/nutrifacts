@@ -1,6 +1,7 @@
 import type { Router, Request, Response } from 'express';
 import type { Db, UserRow } from './db';
 import {
+  CATALOG_VERSION,
   DIETITIAN_PROFILE,
   INITIAL_ADHERENCE_RECORDS,
   INITIAL_APPOINTMENTS,
@@ -13,6 +14,17 @@ import {
   INITIAL_WEIGHT_RECORDS,
 } from '../src/data/seedData';
 import { formatPhone } from '../src/shared/authValidation';
+import {
+  addDays,
+  canRenewEarly,
+  isPlanActive,
+  listPrice,
+  newPlanValidUntil,
+  RENEWAL_BONUS_DAYS,
+  todayIso,
+  upgradeQuote,
+  type PlanPurchase,
+} from '../src/shared/plans';
 
 /**
  * App data (diet charts, appointments, payments…) is stored as JSON records, one row per record,
@@ -52,6 +64,7 @@ const OWNER_FIELD: Record<Collection, string | null> = {
 export const DIETITIAN_ID = DIETITIAN_PROFILE.id;
 const BROADCAST = 'all';
 const MAX_RECORD_BYTES = 20 * 1024 * 1024; // diet charts can carry an uploaded PDF
+const MAX_AVATAR_CHARS = 300_000; // ~220 KB image as a data URL; the app sends ~30 KB
 
 export function migrateData(db: Db) {
   db.exec(`
@@ -97,6 +110,15 @@ export function seedData(db: Db, opts: { demoRecords: boolean }) {
   try {
     // Inserted in reverse so that reading newest-first returns each list in its original order.
     if (!hasAny('packages')) for (const p of [...INITIAL_PACKAGES].reverse()) put(db, 'packages', p.id, p as unknown as Rec);
+    // The clinic's core plans get newer descriptions and new plans, keeping the price and on/off switch the
+    // dietitian may have set. Plans the dietitian created are never touched.
+    for (const p of INITIAL_PACKAGES) {
+      const existing = get(db, 'packages', p.id);
+      if (!existing) put(db, 'packages', p.id, p as unknown as Rec);
+      else if (Number(existing.catalogVersion ?? 0) < CATALOG_VERSION) {
+        put(db, 'packages', p.id, { ...p, priceInr: existing.priceInr, isActive: existing.isActive } as unknown as Rec);
+      }
+    }
 
     if (opts.demoRecords && !hasAny('patients')) {
       const lists: Array<[Collection, Array<{ id: string }>]> = [
@@ -122,6 +144,18 @@ export function seedData(db: Db, opts: { demoRecords: boolean }) {
  * Creates a new patient's clinical profile and welcome message at sign-up, on the server, so the
  * patient appears in the dietitian's roster immediately — even if they close the tab right away.
  */
+const accountFields = (account: Pick<UserRow, 'name' | 'email' | 'phone'>) => ({
+  name: account.name,
+  email: account.email,
+  phone: formatPhone(account.phone),
+});
+
+/** After the account's name / email / phone change, copies them onto the patient profile record. */
+export function syncPatientProfile(db: Db, account: UserRow) {
+  const profile = get(db, 'patients', account.id);
+  if (profile) put(db, 'patients', account.id, { ...profile, ...accountFields(account) });
+}
+
 export function createPatientProfile(db: Db, user: Pick<UserRow, 'id' | 'name' | 'email' | 'phone'>) {
   const today = new Date().toISOString().split('T')[0];
   const profile = {
@@ -221,8 +255,13 @@ function authorize(db: Db, user: UserRow, op: WriteOp): Rec {
       if (!isAdmin && id !== user.id) throw new Forbidden('You can only update your own profile.');
       const account = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow | undefined;
       if (!account || account.role !== 'patient') throw new Invalid('Unknown patient.');
-      // Identity is owned by the account, never by the profile record.
-      return { ...data, id, role: 'patient', email: account.email };
+      // A profile photo is a small uploaded image (or the one already on file) — never a link elsewhere.
+      if (data.avatar !== undefined && data.avatar !== existing?.avatar) {
+        const ok = typeof data.avatar === 'string' && data.avatar.length <= MAX_AVATAR_CHARS && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(data.avatar);
+        if (!ok) throw new Invalid('The profile photo must be a JPG, PNG or WebP image under 200 KB.');
+      }
+      // Identity is owned by the account (changed via /api/account), never by the profile record.
+      return { ...data, ...accountFields(account), id, role: 'patient' };
     }
 
     case 'notifications': {
@@ -255,8 +294,51 @@ function authorize(db: Db, user: UserRow, op: WriteOp): Rec {
       if (existing) throw new Forbidden('Only the clinic can change a payment.');
       const pkg = get(db, 'packages', String(data.packageId));
       if (!pkg || pkg.isActive !== true) throw new Invalid('This plan is no longer available.');
-      if (data.amountInr !== pkg.priceInr || data.packageTitle !== pkg.title) throw new Invalid('The amount does not match the current price.');
       if (data.status !== 'successful') throw new Invalid('Invalid payment status.');
+      if (data.packageTitle !== pkg.title) throw new Invalid('The amount does not match the current price.');
+      const price = Number(pkg.priceInr);
+      const validity = Number(pkg.validityDays);
+      const wrongAmount = () => new Invalid('The amount does not match the current price.');
+
+      // Bought today (or just before midnight UTC): the dates decide how long access lasts, so they're checked too.
+      const today = todayIso();
+      const start = String(data.createdAt ?? '');
+      if (start !== today && start !== addDays(today, -1)) throw new Invalid('Invalid payment date.');
+
+      // The patient's current plan: their latest successful purchase.
+      const latest = rows(db, 'SELECT id, data FROM records WHERE collection = ? AND owner = ?', 'payments', user.id)
+        .map((r) => r.data as unknown as PlanPurchase & { id: string; packageId: string })
+        .filter((p) => p.status === 'successful')
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))[0];
+
+      if (data.upgradeFromPaymentId !== undefined) {
+        // Upgrade: starts now, with credit for the current plan, worked out here.
+        if (!latest || latest.id !== data.upgradeFromPaymentId || !isPlanActive(latest, start)) {
+          throw new Invalid('Your current plan can no longer be upgraded. Please refresh and try again.');
+        }
+        if (price <= listPrice(latest)) throw new Invalid('That plan is not an upgrade.');
+        const inFull = get(db, 'packages', latest.packageId)?.creditInFull === true;
+        const quote = upgradeQuote(latest, price, start, { inFull });
+        if (data.amountInr !== quote.amountDueInr || data.creditInr !== quote.creditInr || data.listPriceInr !== price) throw wrongAmount();
+        if (data.renewalOfPaymentId !== undefined || data.bonusDays !== undefined) throw wrongAmount();
+        if (data.validUntil !== newPlanValidUntil(validity, start)) throw new Invalid('Invalid plan dates.');
+        return data;
+      }
+
+      if (data.amountInr !== price || data.creditInr !== undefined || data.listPriceInr !== undefined) throw wrongAmount();
+
+      if (data.renewalOfPaymentId !== undefined) {
+        // Early renewal: only in the last days of the current plan; starts after it, with the bonus days.
+        if (!latest || latest.id !== data.renewalOfPaymentId || !canRenewEarly(latest, start)) {
+          throw new Invalid('Early renewal is open in the last 7 days of a plan. Please refresh and try again.');
+        }
+        if (data.bonusDays !== RENEWAL_BONUS_DAYS || data.validUntil !== newPlanValidUntil(validity, start, latest)) {
+          throw new Invalid('Invalid plan dates.');
+        }
+        return data;
+      }
+
+      if (data.bonusDays !== undefined || data.validUntil !== newPlanValidUntil(validity, start)) throw new Invalid('Invalid plan dates.');
       return data;
     }
 

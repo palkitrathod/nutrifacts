@@ -1,5 +1,35 @@
 import { describe, expect, it } from 'vitest';
-import { formatPhone, normalizePhone, passwordStrength, validateSignIn, validateSignUp } from './authValidation';
+import {
+  ageOn,
+  formatPhone,
+  normalizePhone,
+  passwordStrength,
+  validateDateOfBirth,
+  validateSignIn,
+  validateSignUp,
+} from './authValidation';
+
+describe('date of birth', () => {
+  const today = new Date(2026, 9, 22); // 22 Oct 2026
+
+  it.each([
+    ['', undefined],
+    ['1990-05-14', undefined],
+    ['2026-10-23', 'Date of birth must be in the past.'],
+    ['2026-02-30', 'Enter a valid date.'],
+    ['14/05/1990', 'Enter a valid date.'],
+    ['1890-01-01', 'Please check the year.'],
+    ['2026-01-01', 'Please check the year.'],
+  ])('%s → %s', (value, expected) => {
+    expect(validateDateOfBirth(value, today)).toBe(expected);
+  });
+
+  it('counts whole years, turning over on the birthday', () => {
+    expect(ageOn('1990-10-22', today)).toBe(36);
+    expect(ageOn('1990-10-23', today)).toBe(35);
+    expect(ageOn('2000-02-29', today)).toBe(26);
+  });
+});
 
 describe('normalizePhone', () => {
   it.each([

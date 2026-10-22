@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { emailedCode, verifyInBrowser } from './mail';
 
 const DEMO_PASSWORD = 'Demo@1234';
 const uniqueEmail = (tag: string) => `e2e.${tag}.${Date.now()}.${Math.floor(Math.random() * 1e6)}@example.com`;
@@ -89,6 +90,10 @@ test.describe('sign up', () => {
     await page.goto('/signup');
     await signUp(page, email);
 
+    // The emailed code has to be entered before the dashboard opens.
+    await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
+    await expect(page.getByText(email)).toBeVisible();
+    await verifyInBrowser(page, email);
     await expect(page).toHaveURL('/app');
     await expect(page.getByText('Welcome back, Meera Iyer')).toBeVisible();
 
@@ -144,8 +149,90 @@ test.describe('sign up', () => {
     await expect(page).toHaveURL(/\/signup\?plan=/);
     await expect(page.getByText(/selected plan/i)).toBeVisible();
 
-    await signUp(page, uniqueEmail('plan'));
-    await expect(page.getByRole('heading', { name: 'Personalized Nutrition Care Plans' })).toBeVisible();
+    const email = uniqueEmail('plan');
+    await signUp(page, email);
+    await verifyInBrowser(page, email);
+    await expect(page.getByRole('heading', { name: 'Your Nutrition Care Plan' })).toBeVisible();
+  });
+});
+
+test.describe('email verification', () => {
+  const codeInput = (page: Page) => page.getByLabel('Verification code');
+
+  test('the app stays locked until the code is entered; a wrong code is explained', async ({ page }) => {
+    const email = uniqueEmail('verify');
+    await page.goto('/signup');
+    await signUp(page, email);
+    await expect(page).toHaveURL('/verify-email?next=%2Fapp');
+
+    // Going straight to the app (or reloading) comes back to the code screen.
+    await page.goto('/app');
+    await expect(page).toHaveURL('/verify-email?next=%2Fapp');
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
+
+    const code = await emailedCode(email);
+    const wrong = code === '000000' ? '111111' : '000000';
+    await codeInput(page).fill(wrong);
+    await expect(page.getByRole('alert')).toContainText("That code isn't right. 4 tries left.");
+    await expect(codeInput(page)).toHaveValue('');
+    await expect(codeInput(page)).toBeFocused();
+
+    await codeInput(page).fill(code);
+    await expect(page.getByRole('heading', { name: 'Email verified!' })).toBeVisible();
+    await expect(page).toHaveURL('/app');
+    await expect(page.getByText('Welcome back, Meera Iyer')).toBeVisible();
+
+    // Once verified, the code screen just forwards to the app.
+    await page.goto('/verify-email');
+    await expect(page).toHaveURL('/app');
+  });
+
+  test('"Send a new code" is held for a minute after sign-up, and the server enforces the wait too', async ({ page }) => {
+    const email = uniqueEmail('resend');
+    await page.goto('/signup');
+    await signUp(page, email);
+    const resend = page.getByRole('button', { name: /send a new code/i });
+    await expect(resend).toBeDisabled();
+    await expect(resend).toHaveText(/in \d+s/);
+
+    // After a reload the page no longer knows when the code went out; the server still refuses.
+    const first = await emailedCode(email);
+    await page.reload();
+    await expect(resend).toBeEnabled();
+    await resend.click();
+    await expect(page.getByRole('alert')).toContainText(/please wait \d+ seconds/i);
+    expect(await emailedCode(email)).toBe(first);
+  });
+
+  test('signing in to an unverified account goes to the code screen', async ({ page, context }) => {
+    const email = uniqueEmail('later');
+    await page.goto('/signup');
+    await signUp(page, email);
+    await expect(page).toHaveURL('/verify-email?next=%2Fapp');
+    await context.clearCookies();
+
+    await page.goto('/signin');
+    await page.getByLabel('Email address').fill(email);
+    await page.getByLabel('Password', { exact: true }).fill('Healthy123');
+    await page.getByRole('button', { name: /^sign in$/i }).click();
+    await verifyInBrowser(page, email);
+    await expect(page).toHaveURL('/app');
+  });
+
+  test('"Sign up again" signs out, and the unverified email can be signed up afresh', async ({ page }) => {
+    const email = uniqueEmail('again');
+    await page.goto('/signup');
+    await signUp(page, email);
+    await page.getByRole('button', { name: 'Sign up again' }).click();
+    await expect(page).toHaveURL('/signup');
+    await page.goto('/app');
+    await expect(page).toHaveURL('/signin?next=%2Fapp');
+
+    await page.goto('/signup');
+    await signUp(page, email, 'Another123');
+    await verifyInBrowser(page, email);
+    await expect(page).toHaveURL('/app');
   });
 });
 

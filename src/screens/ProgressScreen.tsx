@@ -113,7 +113,7 @@ export const ProgressScreen: React.FC = () => {
   const targetLineY = chartHeight - padding - ((targetWt - minWt) / (maxWt - minWt || 1)) * (chartHeight - padding * 2);
 
   return (
-    <div className="flex-1 pb-16 space-y-5 px-4 pt-4 md:px-8 md:pt-6 max-w-5xl mx-auto w-full">
+    <div className="flex-1 pb-16 space-y-5 px-4 pt-4 md:px-8 md:pt-6 max-w-5xl xl:max-w-6xl 2xl:max-w-7xl mx-auto w-full">
       
       {/* Dietitian Header Selector */}
       {isDietitian && (

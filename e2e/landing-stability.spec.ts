@@ -83,18 +83,32 @@ test('opening a page from the bottom of the home page starts at its top; Back re
   await expect.poll(() => page.evaluate(() => Math.round(scrollY))).toBe(homeY);
 });
 
-test('the six services show icons that match what they are', async ({ page }) => {
+test('all 15 programs are listed in 4 categories, each with an icon that matches what it is', async ({ page }) => {
   await page.goto('/');
-  const expected: Record<string, string> = {
-    'Weight Management': 'icon-weighing-scale',
-    'PCOS & PCOD Care': 'lucide-venus',
-    'Diabetes Nutrition': 'lucide-droplet',
-    'Healthy Weight Gain': 'lucide-biceps-flexed',
-    'Therapeutic Diets': 'lucide-stethoscope',
-    'Personalized Meal Planning': 'lucide-salad',
+  const categories: Record<string, Record<string, string>> = {
+    'Everyday Wellness': { 'Lifestyle Reset': 'lucide-sunrise', 'Weight Management': 'icon-weighing-scale', "Women's Wellness": 'lucide-venus' },
+    'Lifestyle Conditions': { 'Lifestyle Diseases': 'lucide-activity', 'Healthy Heart with Comorbidities': 'lucide-heart-pulse', 'Anemia & Iron': 'lucide-droplets' },
+    'Specialised Care': {
+      'Liver Health': 'lucide-citrus',
+      'Gastro Health': 'lucide-soup',
+      'Renal Health': 'lucide-bean',
+      'Neurological Nutrition': 'lucide-brain',
+      'Pediatric Nutrition': 'lucide-baby',
+      'Post-Hospital Recovery': 'lucide-hospital',
+    },
+    'Medical Nutrition Support': { 'Oncology Nutrition Support': 'lucide-ribbon', 'Pancreatic Health': 'lucide-microscope', 'Enteral & Parenteral Nutrition': 'lucide-syringe' },
   };
-  for (const [title, iconClass] of Object.entries(expected)) {
-    const card = page.locator('#services .grid > div').filter({ has: page.getByRole('heading', { name: title, exact: true }) });
-    await expect(card.locator(`svg.${iconClass}`)).toHaveCount(1);
+  let total = 0;
+  for (const [category, programs] of Object.entries(categories)) {
+    await page.locator('#services').getByRole('tab', { name: new RegExp(`^${category}`) }).click();
+    const panel = page.locator('#services').getByRole('tabpanel');
+    await expect(panel.getByRole('article')).toHaveCount(Object.keys(programs).length);
+    for (const [title, iconClass] of Object.entries(programs)) {
+      await expect(panel.getByRole('article', { name: title, exact: true }).locator(`svg.${iconClass}`)).toHaveCount(1);
+      total++;
+    }
   }
+  expect(total).toBe(15);
+  // Assessment-first programs show no online price.
+  await expect(page.locator('#services').getByRole('article', { name: 'Oncology Nutrition Support' })).toContainText('Personalised plan & quote');
 });

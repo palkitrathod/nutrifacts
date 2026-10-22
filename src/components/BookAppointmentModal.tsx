@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { X, Calendar, Clock, Video, MapPin, CheckCircle, Sparkles, User, Phone, Tag, ShieldCheck, HeartPulse } from 'lucide-react';
 import { useNutrition } from '../context/NutritionContext';
 import { ConsultationType, ConsultationTier } from '../types/nutrition';
+import { useEscapeToClose } from './useEscapeToClose';
+import { SERVICE_GROUPS } from './ServiceCatalog';
 
 interface BookAppointmentModalProps {
   isOpen: boolean;
@@ -42,6 +44,8 @@ export const BookAppointmentModal: React.FC<BookAppointmentModalProps> = ({
     setIsSubmitted(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, preselectedService]);
+
+  useEscapeToClose(isOpen, onClose);
 
   if (!isOpen) return null;
 
@@ -99,6 +103,7 @@ export const BookAppointmentModal: React.FC<BookAppointmentModalProps> = ({
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close"
             className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/80 hover:text-white"
           >
             <X className="w-5 h-5" />
@@ -215,16 +220,19 @@ export const BookAppointmentModal: React.FC<BookAppointmentModalProps> = ({
                 onChange={(e) => setServiceCategory(e.target.value)}
                 className="w-full p-2.5 rounded-lg border border-slate-300 bg-white text-slate-800"
               >
-                {services.map((svc) => (
-                  <option key={svc.id} value={svc.title}>
-                    {svc.title} — {svc.subtitle}
-                  </option>
+                {SERVICE_GROUPS.map((g) => (
+                  <optgroup key={g.id} label={g.label}>
+                    {services
+                      .filter((svc) => svc.group === g.id)
+                      .map((svc) => (
+                        <option key={svc.id} value={svc.title}>
+                          {svc.title} — {svc.subtitle}
+                        </option>
+                      ))}
+                  </optgroup>
                 ))}
-                <option value="Fatty Liver & Hepatic Care">Fatty Liver & Hepatic Care (NAFLD)</option>
-                <option value="Irritable Bowel Syndrome (IBS)">Irritable Bowel Syndrome (IBS / Low-FODMAP)</option>
-                <option value="Kidney & Renal Health">Kidney & Renal Health</option>
-                <option value="Cardiovascular & Hypertension">Cardiovascular & Hypertension (DASH)</option>
-                <option value="GERD & Acid Reflux">GERD & Acid Reflux Care</option>
+                {/* An older booking may name a service that has since been renamed: keep it selectable. */}
+                {!services.some((svc) => svc.title === serviceCategory) && <option value={serviceCategory}>{serviceCategory}</option>}
               </select>
             </div>
 

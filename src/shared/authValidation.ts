@@ -67,19 +67,51 @@ export function validatePassword(password: string): string | undefined {
   return undefined;
 }
 
+export function validateName(input: string): string | undefined {
+  const name = normalizeName(input ?? '');
+  if (!name) return 'Enter your full name.';
+  if (name.length > 80) return 'Use at most 80 characters.';
+  if (!NAME_RE.test(name)) return 'Use letters only (spaces, . \' - allowed).';
+  return undefined;
+}
+
+export function validatePhone(input: string): string | undefined {
+  if (!(input ?? '').trim()) return 'Enter your mobile number.';
+  if (!normalizePhone(input)) return 'Enter a 10-digit mobile, or add the country code.';
+  return undefined;
+}
+
+/** Date of birth as YYYY-MM-DD: a real, past date for someone aged 1–120. Empty is allowed (not given). */
+export function validateDateOfBirth(value: string, today = new Date()): string | undefined {
+  if (!value) return undefined;
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const date = m && new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  if (!m || !date || date.getUTCMonth() !== +m[2] - 1 || date.getUTCDate() !== +m[3]) return 'Enter a valid date.';
+  if (date.getTime() > Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) return 'Date of birth must be in the past.';
+  const age = ageOn(value, today);
+  if (age < 1 || age > 120) return 'Please check the year.';
+  return undefined;
+}
+
+/** Whole years between a YYYY-MM-DD birth date and `today`. */
+export function ageOn(dateOfBirth: string, today = new Date()): number {
+  const [y, mo, d] = dateOfBirth.split('-').map(Number);
+  let age = today.getFullYear() - y;
+  if (today.getMonth() + 1 < mo || (today.getMonth() + 1 === mo && today.getDate() < d)) age--;
+  return age;
+}
+
 export function validateSignUp(input: SignUpInput): FieldErrors<keyof SignUpInput> {
   const errors: FieldErrors<keyof SignUpInput> = {};
 
-  const name = normalizeName(input.name ?? '');
-  if (!name) errors.name = 'Enter your full name.';
-  else if (name.length > 80) errors.name = 'Use at most 80 characters.';
-  else if (!NAME_RE.test(name)) errors.name = 'Use letters only (spaces, . \' - allowed).';
+  const nameError = validateName(input.name);
+  if (nameError) errors.name = nameError;
 
   const emailError = validateEmail(input.email ?? '');
   if (emailError) errors.email = emailError;
 
-  if (!(input.phone ?? '').trim()) errors.phone = 'Enter your mobile number.';
-  else if (!normalizePhone(input.phone)) errors.phone = 'Enter a 10-digit mobile, or add the country code.';
+  const phoneError = validatePhone(input.phone);
+  if (phoneError) errors.phone = phoneError;
 
   const passwordError = validatePassword(input.password ?? '');
   if (passwordError) errors.password = passwordError;

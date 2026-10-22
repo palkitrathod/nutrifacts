@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { hashPassword, verifyPassword } from './passwords';
 import { migrateData } from './data';
+import { migrateEmailCodes } from './emailVerification';
 
 export type Role = 'patient' | 'dietitian';
 
@@ -14,7 +15,11 @@ export interface UserRow {
   role: Role;
   password_hash: string;
   created_at: string;
+  /** When the account proved it owns its email address (null = not yet). */
+  email_verified_at: string | null;
 }
+
+const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 export type Db = DatabaseSync;
 
@@ -46,6 +51,13 @@ export function openDb(file: string): Db {
   // Sessions remember their length so they can be extended while in use.
   const sessionCols = (db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>).map((c) => c.name);
   if (!sessionCols.includes('ttl')) db.exec('ALTER TABLE sessions ADD COLUMN ttl INTEGER NOT NULL DEFAULT 86400000');
+  // Email verification arrived after the first accounts were created: those count as verified.
+  const userCols = (db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).map((c) => c.name);
+  if (!userCols.includes('email_verified_at')) {
+    db.exec('ALTER TABLE users ADD COLUMN email_verified_at TEXT');
+    db.exec('UPDATE users SET email_verified_at = created_at');
+  }
+  migrateEmailCodes(db);
   migrateData(db);
   return db;
 }
@@ -60,10 +72,22 @@ export const users = {
   setPassword(db: Db, id: string, passwordHash: string) {
     db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, id);
   },
-  insert(db: Db, u: Omit<UserRow, 'created_at'>): UserRow {
+  setNameAndPhone(db: Db, id: string, name: string, phone: string) {
+    db.prepare('UPDATE users SET name = ?, phone = ? WHERE id = ?').run(name, phone, id);
+  },
+  /** Only for an address the person has just proved they own. */
+  setVerifiedEmail(db: Db, id: string, email: string) {
+    db.prepare(`UPDATE users SET email = ?, email_verified_at = ${NOW_SQL} WHERE id = ?`).run(email, id);
+  },
+  markEmailVerified(db: Db, id: string) {
+    db.prepare(`UPDATE users SET email_verified_at = ${NOW_SQL} WHERE id = ?`).run(id);
+  },
+  /** Self sign-ups start unverified; accounts set up by the clinic pass `verified: true`. */
+  insert(db: Db, u: Omit<UserRow, 'created_at' | 'email_verified_at'> & { verified?: boolean }): UserRow {
     db.prepare(
-      'INSERT INTO users (id, name, email, phone, role, password_hash) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(u.id, u.name, u.email, u.phone, u.role, u.password_hash);
+      `INSERT INTO users (id, name, email, phone, role, password_hash, email_verified_at)
+       VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ? THEN ${NOW_SQL} END)`
+    ).run(u.id, u.name, u.email, u.phone, u.role, u.password_hash, u.verified ? 1 : 0);
     return users.byId(db, u.id)!;
   },
 };
@@ -85,7 +109,7 @@ export async function seed(db: Db, opts: { demoUsers: boolean; adminEmail?: stri
     const demoHash = await hashPassword(DEMO_PASSWORD);
     for (const u of DEMO_USERS) {
       if (!users.byId(db, u.id) && !users.byEmail(db, u.email)) {
-        users.insert(db, { ...u, password_hash: demoHash });
+        users.insert(db, { ...u, password_hash: demoHash, verified: true });
       }
     }
   }
@@ -95,7 +119,7 @@ export async function seed(db: Db, opts: { demoUsers: boolean; adminEmail?: stri
     const existing = users.byId(db, 'dietitian-anchal');
     if (existing) {
       if (!(await verifyPassword(opts.adminPassword, existing.password_hash)) || existing.email !== opts.adminEmail.toLowerCase()) {
-        db.prepare('UPDATE users SET email = ?, password_hash = ? WHERE id = ?')
+        db.prepare(`UPDATE users SET email = ?, password_hash = ?, email_verified_at = COALESCE(email_verified_at, ${NOW_SQL}) WHERE id = ?`)
           .run(opts.adminEmail.toLowerCase(), hash, existing.id);
         // A changed admin password signs out every existing admin session.
         db.prepare('DELETE FROM sessions WHERE user_id = ?').run(existing.id);
@@ -108,6 +132,7 @@ export async function seed(db: Db, opts: { demoUsers: boolean; adminEmail?: stri
         phone: '+919872154320',
         role: 'dietitian',
         password_hash: hash,
+        verified: true,
       });
     }
   }

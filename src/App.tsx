@@ -13,7 +13,6 @@ import {
 import { NutritionProvider, SESSION_EXPIRED, useNutrition } from './context/NutritionContext';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ApiError } from './auth/authApi';
-import { AndroidFrame } from './components/AndroidFrame';
 import { TopAppBar } from './components/TopAppBar';
 import { BottomNavBar } from './components/BottomNavBar';
 import { WhatsAppButton } from './components/WhatsAppButton';
@@ -32,10 +31,12 @@ import { LandingPage } from './screens/LandingPage';
 import { SignInPage } from './screens/auth/SignInPage';
 import { SignUpPage } from './screens/auth/SignUpPage';
 import { ForgotPasswordPage } from './screens/auth/ForgotPasswordPage';
+import { VerifyEmailPage } from './screens/auth/VerifyEmailPage';
 import { safeNextPath } from './screens/auth/AuthFields';
 import { CheckoutPaymentModal } from './components/CheckoutPaymentModal';
 import { PaymentReceiptModal } from './components/PaymentReceiptModal';
 import { NutritionPackage, PackagePayment } from './types/nutrition';
+import { isPlanActive } from './shared/plans';
 
 /** Optional hand-off from the sign-up page (e.g. the plan or service picked on the home page). */
 interface AppEntryState {
@@ -45,9 +46,14 @@ interface AppEntryState {
 
 // ── Signed-in app shell ────────────────────────────────────────────────────
 function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<void>; entry: AppEntryState | null }) {
-  const { currentUser, isDietitian, patients, getCurrentUserDietChart, syncError, dismissSyncError } = useNutrition();
+  const { currentUser, isDietitian, patients, getCurrentUserDietChart, getActivePackage, syncError, dismissSyncError } = useNutrition();
 
   const [activeTab, setActiveTab] = useState<string>(entry?.openTab ?? 'home');
+  // "My profile" in the account panel opens the Profile tab with its edit form showing (only that once).
+  const [profileEditRequest, setProfileEditRequest] = useState(0);
+  useEffect(() => {
+    if (activeTab !== 'profile') setProfileEditRequest(0);
+  }, [activeTab]);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
@@ -55,7 +61,7 @@ function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<vo
   const [bookServicePreset, setBookServicePreset] = useState<string | undefined>(entry?.bookService);
 
   // Payment states
-  const [checkoutPackage, setCheckoutPackage] = useState<NutritionPackage | null>(null);
+  const [checkout, setCheckout] = useState<{ pkg: NutritionPackage; upgrade: boolean; renew: boolean } | null>(null);
   const [viewingReceipt, setViewingReceipt] = useState<PackagePayment | null>(null);
 
   const currentChart = getCurrentUserDietChart();
@@ -69,17 +75,23 @@ function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<vo
     setIsPdfModalOpen(true);
   };
 
-  const handleSelectPackageToBuy = (pkg: NutritionPackage) => {
-    setCheckoutPackage(pkg);
+  const handleSelectPackageToBuy = (pkg: NutritionPackage, options: { upgrade?: boolean; renew?: boolean } = {}) => {
+    setCheckout({ pkg, upgrade: !!options.upgrade, renew: !!options.renew });
+  };
+
+  // Buying from Home while a plan is running would skip the upgrade credit / scheduled downgrade: use My Plans.
+  const handleBuyFromHome = (pkg: NutritionPackage) => {
+    if (isPlanActive(getActivePackage(currentUser.id))) setActiveTab('plans');
+    else handleSelectPackageToBuy(pkg);
   };
 
   const handlePaymentSuccess = (payment: PackagePayment) => {
-    setCheckoutPackage(null);
+    setCheckout(null);
     setViewingReceipt(payment);
   };
 
   return (
-    <AndroidFrame onOpenAccount={() => setIsAccountOpen(true)}>
+    <div className="min-h-screen flex flex-col bg-[#F7F9F7] text-slate-800 font-sans selection:bg-[#3E6553] selection:text-white">
       {/* Top App Header */}
       <TopAppBar
         onOpenNotifications={() => setIsNotificationsOpen(true)}
@@ -95,7 +107,7 @@ function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<vo
             onNavigateTab={(tab) => setActiveTab(tab)}
             onOpenBookAppointment={handleOpenBookModal}
             onOpenPdfChart={handleOpenPdfModal}
-            onOpenCheckout={handleSelectPackageToBuy}
+            onOpenCheckout={handleBuyFromHome}
           />
         )}
 
@@ -118,6 +130,8 @@ function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<vo
 
         {activeTab === 'profile' && (
           <ProfileScreen
+            key={profileEditRequest}
+            startEditing={profileEditRequest > 0}
             onNavigateTab={(tab) => setActiveTab(tab)}
             onOpenPdfModal={handleOpenPdfModal}
             onViewReceipt={(payment) => setViewingReceipt(payment)}
@@ -137,7 +151,7 @@ function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<vo
       {/* Floating WhatsApp Action Button */}
       <WhatsAppButton />
 
-      {/* Android Fixed Bottom Navigation Bar */}
+      {/* Bottom tab bar (phones & tablets) */}
       <BottomNavBar activeTab={activeTab} onTabChange={(tab) => setActiveTab(tab)} />
 
       {/* Modals & Overlays */}
@@ -145,6 +159,15 @@ function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<vo
         isOpen={isAccountOpen}
         onClose={() => setIsAccountOpen(false)}
         onSignOut={onSignOut}
+        onOpenProfile={
+          isDietitian
+            ? undefined
+            : () => {
+                setIsAccountOpen(false);
+                setProfileEditRequest((n) => n + 1);
+                setActiveTab('profile');
+              }
+        }
       />
 
       <NotificationModal
@@ -168,11 +191,13 @@ function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<vo
       />
 
       {/* Checkout Payment Modal */}
-      {checkoutPackage && (
+      {checkout && (
         <CheckoutPaymentModal
-          packageItem={checkoutPackage}
-          isOpen={!!checkoutPackage}
-          onClose={() => setCheckoutPackage(null)}
+          packageItem={checkout.pkg}
+          upgrade={checkout.upgrade}
+          renew={checkout.renew}
+          isOpen
+          onClose={() => setCheckout(null)}
           onSuccess={handlePaymentSuccess}
         />
       )}
@@ -184,7 +209,7 @@ function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<vo
           onClose={() => setViewingReceipt(null)}
         />
       )}
-    </AndroidFrame>
+    </div>
   );
 }
 
@@ -243,8 +268,10 @@ function ProtectedApp() {
     window.location.replace(location.pathname + location.search);
   };
 
+  const needsVerification = user?.emailVerified === false;
+
   useEffect(() => {
-    if (!user) return;
+    if (!user || needsVerification) return; // the server holds back data until the email is verified
     setLoadError(null);
     activateAccount(user)
       .then(() => setSessionNotice(false))
@@ -262,7 +289,8 @@ function ProtectedApp() {
   }, [syncError]);
 
   useEffect(() => {
-    if (location.state) navigate(location.pathname + location.search, { replace: true, state: null });
+    // (Not when heading to verification: that redirect carries the hand-off along.)
+    if (location.state && !needsVerification) navigate(location.pathname + location.search, { replace: true, state: null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -295,6 +323,10 @@ function ProtectedApp() {
     if (signingOut.current) return <FullPageLoader />; // on the way to the home page
     const next = encodeURIComponent(location.pathname + location.search);
     return <Navigate to={`/signin?next=${next}`} replace />;
+  }
+  if (needsVerification) {
+    const next = encodeURIComponent(location.pathname + location.search);
+    return <Navigate to={`/verify-email?next=${next}`} replace state={entry} />;
   }
   if (loadError) {
     return (
@@ -329,13 +361,15 @@ function ProtectedApp() {
  * Sign-in / sign-up pages are for signed-out visitors only. Someone who arrives already signed in
  * is sent on; someone who signs in *on* the page is left alone so the page can navigate itself
  * (to `?next=` or with the sign-up hand-off) instead of racing this redirect.
+ * An account that hasn't verified its email hasn't finished signing up, so it counts as a visitor
+ * here: it can sign in again (back to the code screen) or start a fresh sign-up.
  */
 function GuestOnly({ children }: { children: React.ReactElement }) {
-  const { status } = useAuth();
+  const { status, user } = useAuth();
   const [params] = useSearchParams();
   const arrivedSignedIn = useRef<boolean | null>(null);
   if (status !== 'loading' && arrivedSignedIn.current === null) {
-    arrivedSignedIn.current = status === 'authenticated';
+    arrivedSignedIn.current = status === 'authenticated' && !!user?.emailVerified;
   }
   if (status === 'loading') return <FullPageLoader />;
   if (arrivedSignedIn.current) return <Navigate to={safeNextPath(params.get('next'))} replace />;
@@ -456,6 +490,7 @@ export function AppRoutes() {
       <Route path="/signin" element={<GuestOnly><SignInPage /></GuestOnly>} />
       <Route path="/signup" element={<GuestOnly><SignUpPage /></GuestOnly>} />
       <Route path="/forgot-password" element={<GuestOnly><ForgotPasswordPage /></GuestOnly>} />
+      <Route path="/verify-email" element={<VerifyEmailPage />} />
       <Route path="/app/*" element={<ProtectedApp />} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>

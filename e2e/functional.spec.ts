@@ -1,4 +1,5 @@
 import { expect, test as base, type APIRequestContext, type Browser, type Locator, type Page } from '@playwright/test';
+import { verifyViaApi } from './mail';
 
 /**
  * Functional end-to-end tests of the signed-in app (patient + dietitian journeys).
@@ -86,6 +87,7 @@ async function newPatient(page: Page, tag = 'p'): Promise<Account> {
   });
   expect(res.status(), await res.text()).toBe(201);
   const { user } = await res.json();
+  await verifyViaApi(page.request, email);
   await page.goto('/app');
   await expect(page.getByText(`Welcome back, ${name}`)).toBeVisible();
   // The clinical profile is created on first sign-in and saved by the auto-save.
@@ -124,7 +126,8 @@ const appData = async (page: Page | APIRequestContext): Promise<Data> => {
   return res.json();
 };
 
-const tab = (page: Page, label: string) => page.locator('nav').last().getByRole('button', { name: label, exact: true }).click();
+/** Opens a section from the main navigation (top bar on wide screens, tab bar on phones). */
+const tab = (page: Page, label: string) => page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: label, exact: true }).click();
 /** The full-screen overlay of a modal, found by a piece of its text. */
 const modal = (page: Page, text: string | RegExp) => page.locator('div.fixed.inset-0').filter({ hasText: text });
 const nextSave = (page: Page) =>
@@ -188,13 +191,14 @@ test.describe('patient', () => {
 
   test('2. buy a package: receipt, My Purchases, program updated, dietitian notified', async ({ page, guard, playwright, baseURL }) => {
     const me = await newPatient(page, 'buy');
-    await tab(page, 'Plans');
-    await expect(page.getByRole('heading', { name: 'Personalized Nutrition Care Plans' })).toBeVisible();
+    await tab(page, 'My Plans');
+    await expect(page.getByRole('heading', { name: 'Your Nutrition Care Plan' })).toBeVisible();
+    await expect(page.getByText('No plan yet.')).toBeVisible();
 
-    const card = ancestor(page.getByRole('heading', { name: 'Personalized Diet Plan', exact: true }), 'rounded-2xl');
-    await card.getByRole('button', { name: /Select & Pay Online/ }).click();
+    const card = ancestor(page.getByRole('heading', { name: 'Personalised Diet Plan', exact: true }), 'rounded-2xl');
+    await card.getByRole('button', { name: /Choose this plan/ }).click();
     const checkout = modal(page, 'Secure Payment Gateway');
-    await expect(checkout.getByRole('heading', { name: 'Personalized Diet Plan' })).toBeVisible();
+    await expect(checkout.getByRole('heading', { name: 'Personalised Diet Plan' })).toBeVisible();
     await checkout.getByRole('button', { name: /Net Banking/ }).click();
     await checkout.locator('select').selectOption('ICICI Bank');
 
@@ -207,27 +211,27 @@ test.describe('patient', () => {
 
     const receipt = modal(page, 'Payment Receipt & Tax Invoice');
     await expect(receipt).toBeVisible();
-    await expect(receipt).toContainText('Personalized Diet Plan');
+    await expect(receipt).toContainText('Personalised Diet Plan');
     await expect(receipt).toContainText('₹999.00');
     await expect(receipt).toContainText(me.name);
     await expect(receipt).toContainText('Net Banking (ICICI Bank)');
     await receipt.locator('button').nth(2).click(); // close (X)
     await expect(receipt).toBeHidden();
 
-    await expect(page.getByText('Active Package: Personalized Diet Plan')).toBeVisible();
+    await expect(page.getByText('Current plan: Personalised Diet Plan')).toBeVisible();
     await page.getByRole('button', { name: 'My Purchases' }).click();
-    const row = ancestor(page.getByText('Personalized Diet Plan', { exact: true }).last(), 'justify-between');
+    const row = ancestor(page.getByText('Personalised Diet Plan', { exact: true }).last(), 'justify-between');
     await expect(row).toContainText('₹999');
     await expect(row).toContainText('successful');
 
     // Persisted, and the profile's program changed.
     await page.reload();
-    await tab(page, 'Profile');
-    await expect(page.getByText('Personalized Diet Plan').first()).toBeVisible();
+    await tab(page, 'My Profile');
+    await expect(page.getByText('Personalised Diet Plan').first()).toBeVisible();
     const data = await appData(page);
     expect(data.payments).toHaveLength(1);
     expect(data.payments[0]).toMatchObject({ packageId: 'pkg-personalized-diet-plan', amountInr: 999, status: 'successful', patientId: me.id });
-    expect(data.patients[0].assignedProgram).toBe('Personalized Diet Plan');
+    expect(data.patients[0].assignedProgram).toBe('Personalised Diet Plan');
 
     // The dietitian got the order notification.
     const dt = await apiAs(playwright, baseURL, DIETITIAN);
@@ -237,27 +241,36 @@ test.describe('patient', () => {
     await guard.check();
   });
 
-  test('2b. after buying a second package, the newest one is the active package after reload', async ({ page, guard }) => {
+  test('2b. upgrading credits the unused days, and the new plan is the current one after reload', async ({ page, guard }) => {
     // Regression test (fixed): getActivePackage() returns payments[0]; locally new payments are prepended, but GET /api/data
     // returns records in insertion order (oldest first), so after a reload the OLDEST package shows as active.
     // NutritionContext.tsx:695-698 (and no ordering in server/data.ts loadFor / dataApi).
     await newPatient(page, 'buy2');
-    await tab(page, 'Plans');
-    for (const [title, price] of [['Personalized Diet Plan', 999], ['Monthly Nutrition Care', 2499]] as const) {
-      await ancestor(page.getByRole('heading', { name: title, exact: true }), 'rounded-2xl').getByRole('button', { name: /Select & Pay Online|Renew/ }).click();
+    await tab(page, 'My Plans');
+    // ₹999 plan bought today, then upgraded the same day: all of it is credited, ₹2499 − ₹999 = ₹1500.
+    for (const [title, button, pay] of [
+      ['Personalised Diet Plan', /Choose this plan/, 'Pay ₹999 & Activate Package'],
+      ['Monthly Nutrition Care', /Upgrade · pay ₹1,500/, 'Pay ₹1500 & Upgrade Plan'],
+    ] as const) {
+      const card = title === 'Monthly Nutrition Care' ? page.getByRole('article', { name: 'Nutrition Care', exact: true }) : ancestor(page.getByRole('heading', { name: title, exact: true }), 'rounded-2xl');
+      if (title === 'Monthly Nutrition Care') await card.getByRole('radio', { name: /^1 month,/ }).click();
+      await card.getByRole('button', { name: button }).click();
       const checkout = modal(page, 'Secure Payment Gateway');
       const saved = nextSave(page);
       await fillUpi(checkout);
-      await checkout.getByRole('button', { name: `Pay ₹${price} & Activate Package` }).click();
+      if (title === 'Monthly Nutrition Care') await expect(checkout).toContainText('Credit for unused days of Personalised Diet Plan');
+      await checkout.getByRole('button', { name: pay }).click();
       await expect(checkout.getByText('Payment Successful!')).toBeVisible();
       await saved;
       await checkout.getByRole('button', { name: /Go to My Diet & Schedule/ }).click();
       await modal(page, 'Payment Receipt & Tax Invoice').locator('button').nth(2).click();
     }
-    await expect(page.getByText('Active Package: Monthly Nutrition Care')).toBeVisible();
+    await expect(page.getByText('Current plan: Monthly Nutrition Care')).toBeVisible();
     await page.reload();
-    await tab(page, 'Plans');
-    await expect(page.getByText('Active Package: Monthly Nutrition Care')).toBeVisible({ timeout: 3000 });
+    await tab(page, 'My Plans');
+    await expect(page.getByText('Current plan: Monthly Nutrition Care')).toBeVisible({ timeout: 3000 });
+    const upgrade = (await appData(page)).payments.find((p: Data) => p.packageId === 'pkg-monthly-nutrition-care');
+    expect(upgrade).toMatchObject({ amountInr: 1500, listPriceInr: 2499, creditInr: 999 });
     await guard.check();
   });
 
@@ -441,19 +454,21 @@ test.describe('patient', () => {
 
   test('7. profile: patient edits health details; they save and persist', async ({ page, guard }) => {
     await newPatient(page, 'profile');
-    await tab(page, 'Profile');
-    await page.getByRole('button', { name: 'Edit Health Details' }).click();
-    const field = (label: string) => page.locator(`label:text-is("${label}") + input, label:text-is("${label}") + select`);
-    await field('Age (Years)').fill('34');
-    await field('Height (cm)').fill('170');
-    await field('Current Weight (kg)').fill('80.5');
-    await field('Target Weight (kg)').fill('70');
-    await field('Dietary Preference').selectOption('Vegan');
-    await field('Daily Water Goal (Litres)').fill('2.5');
-    await field('Medical Conditions / Symptoms (comma-separated)').fill('PCOS, Hypothyroidism');
-    await field('Food Allergies or Intolerances').fill('Peanuts');
+    await tab(page, 'My Profile');
+    await page.getByRole('button', { name: 'Edit profile' }).click();
+    const form = page.getByRole('form', { name: 'Edit profile' });
+    // Age is worked out from the date of birth: born 1 January, 34 years ago → 34 all year.
+    const year = new Date().getFullYear() - 34;
+    await form.getByLabel('Date of birth').fill(`${year}-01-01`);
+    await form.getByLabel('Height (cm)').fill('170');
+    await form.getByLabel('Current weight (kg)').fill('80.5');
+    await form.getByLabel('Target weight (kg)').fill('70');
+    await form.getByLabel('Dietary preference').selectOption('Vegan');
+    await form.getByLabel('Daily water goal (litres)').fill('2.5');
+    await form.getByLabel('Medical conditions (comma-separated)').fill('PCOS, Hypothyroidism');
+    await form.getByLabel('Food allergies or intolerances').fill('Peanuts');
     const saved = nextSave(page);
-    await page.getByRole('button', { name: 'Save Changes' }).click();
+    await form.getByRole('button', { name: 'Save changes' }).click();
     expect((await saved).status()).toBe(200);
 
     const verify = async () => {
@@ -468,10 +483,10 @@ test.describe('patient', () => {
     await page.reload();
     await expect(page.getByText('Goal: 2.5 Litres')).toBeVisible(); // Home hydration card uses the new goal
     await expect(page.getByText('/ 10 glasses')).toBeVisible();
-    await tab(page, 'Profile');
+    await tab(page, 'My Profile');
     await verify();
     const p = (await appData(page)).patients[0];
-    expect(p).toMatchObject({ age: 34, heightCm: 170, currentWeightKg: 80.5, targetWeightKg: 70, dietaryPreference: 'Vegan', waterGoalLitres: 2.5, medicalConditions: ['PCOS', 'Hypothyroidism'], allergies: ['Peanuts'] });
+    expect(p).toMatchObject({ age: 34, dateOfBirth: `${year}-01-01`, heightCm: 170, currentWeightKg: 80.5, targetWeightKg: 70, dietaryPreference: 'Vegan', waterGoalLitres: 2.5, medicalConditions: ['PCOS', 'Hypothyroidism'], allergies: ['Peanuts'] });
     await guard.check();
   });
 
@@ -480,10 +495,12 @@ test.describe('patient', () => {
     // (age 28, height 165, weight 68, target 58 — ProfileScreen.tsx:103-110), so changing only e.g.
     // allergies and saving writes those fake numbers into the clinical record. The header also shows " kg".
     await newPatient(page, 'profile2');
-    await tab(page, 'Profile');
-    await page.getByRole('button', { name: 'Edit Health Details' }).click();
-    await expect(page.locator('label:text-is("Age (Years)") + input')).toHaveValue('', { timeout: 2000 });
-    await expect(page.locator('label:text-is("Current Weight (kg)") + input')).toHaveValue('');
+    await tab(page, 'My Profile');
+    await page.getByRole('button', { name: 'Edit profile' }).click();
+    const form = page.getByRole('form', { name: 'Edit profile' });
+    await expect(form.getByLabel('Date of birth')).toHaveValue('', { timeout: 2000 });
+    await expect(form.getByLabel('Height (cm)')).toHaveValue('');
+    await expect(form.getByLabel('Current weight (kg)')).toHaveValue('');
     await guard.check();
   });
 
@@ -532,10 +549,11 @@ test.describe('patient', () => {
     // Regression test (fixed): BookAppointmentModal is always mounted and copies `preselectedService` into state only once
     // (BookAppointmentModal.tsx:25-27), so the service chosen on Home is ignored.
     await newPatient(page, 'svc');
-    await page.getByRole('heading', { name: 'Diabetes Nutrition', exact: true }).click();
-    await modal(page, 'HbA1c Reduction').getByRole('button', { name: 'Book Consultation' }).click();
+    await page.getByRole('tab', { name: /^Lifestyle Conditions/ }).click();
+    await page.getByRole('article', { name: 'Lifestyle Diseases' }).getByRole('button', { name: /Details/ }).click();
+    await page.getByRole('dialog', { name: 'Lifestyle Diseases' }).getByRole('button', { name: 'Book Consultation' }).click();
     const book = modal(page, 'Book Consultation with Dt. Anchal');
-    await expect(book.locator('select').first()).toHaveValue('Diabetes Nutrition', { timeout: 2000 });
+    await expect(book.locator('select').first()).toHaveValue('Lifestyle Diseases', { timeout: 2000 });
     await guard.check();
   });
 
@@ -554,13 +572,12 @@ test.describe('patient', () => {
     await guard.check();
   });
 
-  test('Desktop View: "Plans & Pricing" top-nav link opens the Plans screen', async ({ page, guard }) => {
-    // Regression test (fixed): TopAppBar.tsx:85 navigates to tab 'packages', but App.tsx only renders the Plans screen for
-    // tab 'plans' (App.tsx:95), so the page body goes blank.
+  test('top navigation: My Plans and My Profile open their pages', async ({ page, guard }) => {
     await signIn(page, PRIYA.email);
-    await page.getByTitle('Responsive Desktop View').click();
-    await page.locator('header nav').getByRole('button', { name: 'Plans & Pricing' }).click();
-    await expect(page.getByRole('heading', { name: 'Personalized Nutrition Care Plans' })).toBeVisible({ timeout: 2000 });
+    await page.locator('header nav').getByRole('button', { name: 'My Plans' }).click();
+    await expect(page.getByRole('heading', { name: 'Your Nutrition Care Plan' })).toBeVisible({ timeout: 2000 });
+    await page.locator('header nav').getByRole('button', { name: 'My Profile' }).click();
+    await expect(page.getByRole('button', { name: 'Edit profile' })).toBeVisible({ timeout: 2000 });
     await guard.check();
   });
 
@@ -570,12 +587,12 @@ test.describe('patient', () => {
     // the patient loaded the app, the server rejects the payment ("The amount does not match the current
     // price.") but the patient has already been told the payment succeeded.
     await newPatient(page, 'stale');
-    await tab(page, 'Plans');
+    await tab(page, 'My Plans');
     const dt = await apiAs(playwright, baseURL, DIETITIAN);
     const pkg = (await appData(dt)).packages.find((p: Data) => p.id === 'pkg-basic-consultation');
     await dt.post('/api/data/batch', { data: { ops: [{ collection: 'packages', id: pkg.id, data: { ...pkg, priceInr: pkg.priceInr + 50 } }] } });
     try {
-      await ancestor(page.getByRole('heading', { name: 'Basic Nutrition Consultation', exact: true }), 'rounded-2xl').getByRole('button', { name: /Select & Pay Online/ }).click();
+      await ancestor(page.getByRole('heading', { name: 'Starter Consultation', exact: true }), 'rounded-2xl').getByRole('button', { name: /Choose this plan/ }).click();
       const checkout = modal(page, 'Secure Payment Gateway');
       await fillUpi(checkout);
       guard.allow(/400 POST .*\/api\/data\/batch/, /status of 400/);
@@ -733,7 +750,7 @@ test.describe('dietitian', () => {
   test('12. manage pricing: a price change and a deactivated plan show on the public page', async ({ page, guard, browser }) => {
     await signIn(page, DIETITIAN);
     await tab(page, 'Pricing');
-    const card = () => ancestor(page.getByRole('heading', { name: 'Basic Nutrition Consultation', exact: true }), 'rounded-2xl');
+    const card = () => ancestor(page.getByRole('heading', { name: 'Starter Consultation', exact: true }), 'rounded-2xl');
     const originalPrice = 499;
     await expect(card()).toContainText(`₹${originalPrice}`);
 
@@ -749,7 +766,7 @@ test.describe('dietitian', () => {
 
     const publicCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const pub = guard.watch(await publicCtx.newPage(), 'public');
-    const publicCard = () => ancestor(pub.locator('#pricing').getByRole('heading', { name: 'Basic Nutrition Consultation', exact: true }), 'rounded-2xl');
+    const publicCard = () => ancestor(pub.locator('#pricing').getByRole('heading', { name: 'Starter Consultation', exact: true }), 'rounded-2xl');
     try {
       await setPrice(549);
       await pub.goto('/#pricing');
@@ -761,8 +778,8 @@ test.describe('dietitian', () => {
       expect((await saved).status()).toBe(200);
       await expect(card()).toContainText('Inactive');
       await pub.reload();
-      await expect(pub.locator('#pricing').getByRole('heading', { name: 'Personalized Diet Plan', exact: true })).toBeVisible();
-      await expect(pub.locator('#pricing').getByRole('heading', { name: 'Basic Nutrition Consultation', exact: true })).toHaveCount(0);
+      await expect(pub.locator('#pricing').getByRole('heading', { name: 'Personalised Diet Plan', exact: true })).toBeVisible();
+      await expect(pub.locator('#pricing').getByRole('heading', { name: 'Starter Consultation', exact: true })).toHaveCount(0);
 
       // Restore.
       saved = nextSave(page);
@@ -786,8 +803,8 @@ test.describe('dietitian', () => {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const patient = guard.watch(await ctx.newPage(), 'patient');
     const me = await newPatient(patient, 'refund');
-    await tab(patient, 'Plans');
-    await ancestor(patient.getByRole('heading', { name: 'Basic Nutrition Consultation', exact: true }), 'rounded-2xl').getByRole('button', { name: /Select & Pay Online/ }).click();
+    await tab(patient, 'My Plans');
+    await ancestor(patient.getByRole('heading', { name: 'Starter Consultation', exact: true }), 'rounded-2xl').getByRole('button', { name: /Choose this plan/ }).click();
     const checkout = modal(patient, 'Secure Payment Gateway');
     const paid = nextSave(patient);
     await fillUpi(checkout);
@@ -803,16 +820,16 @@ test.describe('dietitian', () => {
     await expect(row()).toContainText('successful');
     await row().getByRole('button', { name: 'Issue Refund' }).click();
     const confirm = modal(page, 'Confirm Patient Refund');
-    await confirm.locator('input').fill('E2E duplicate order');
+    await confirm.getByLabel('Refund Reason / Notes').fill('E2E duplicate order');
     const saved = nextSave(page);
     await confirm.getByRole('button', { name: 'Confirm Refund' }).click();
     expect((await saved).status()).toBe(200);
     await expect(row()).toContainText('refunded');
-    await expect(row()).toContainText('Refunded: E2E duplicate order');
+    await expect(row()).toContainText(/Refunded ₹\d+: E2E duplicate order/);
 
     await patient.reload();
-    await tab(patient, 'Plans');
-    await expect(patient.getByText(/Active Package:/)).toHaveCount(0);
+    await tab(patient, 'My Plans');
+    await expect(patient.getByText(/Current plan:/)).toHaveCount(0);
     await patient.getByRole('button', { name: 'My Purchases' }).click();
     await expect(patient.getByText('refunded', { exact: true })).toBeVisible();
     await bell(patient).click();

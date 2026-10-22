@@ -4,12 +4,28 @@ import cookieParser from 'cookie-parser';
 import { users, type Db, type UserRow } from './db';
 import { hashPassword, verifyPassword, getDummyHash, ServerBusyError } from './passwords';
 import { RateLimiter } from './rateLimiter';
-import { createPatientProfile, registerDataRoutes } from './data';
+import { createPatientProfile, registerDataRoutes, syncPatientProfile } from './data';
+import type { Mailer } from './mailer';
+import { verificationEmail } from './emails/verificationEmail';
+import {
+  CODE_TTL_MS,
+  RESEND_COOLDOWN_MS,
+  checkCode,
+  discardCode,
+  isCodeFormat,
+  issueCode,
+  resendWaitSec,
+  type CheckResult,
+  type CodePurpose,
+} from './emailVerification';
 import {
   normalizeEmail,
   normalizeName,
   normalizePhone,
+  validateEmail,
+  validateName,
   validatePassword,
+  validatePhone,
   validateSignIn,
   validateSignUp,
 } from '../src/shared/authValidation';
@@ -22,6 +38,8 @@ const DEFAULT_TTL = 1 * DAY;
 export interface AppOptions {
   db: Db;
   secureCookies: boolean;
+  /** Sends the email-verification codes. */
+  mailer: Mailer;
   /**
    * Express "trust proxy" setting. Leave unset when browsers connect directly (then
    * X-Forwarded-* headers are ignored and can't be spoofed); set it to the number of proxies
@@ -36,6 +54,7 @@ export interface AppOptions {
   signInLimiter?: RateLimiter;
   signInIpLimiter?: RateLimiter;
   signUpLimiter?: RateLimiter;
+  resendCodeLimiter?: RateLimiter;
 }
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
@@ -49,7 +68,7 @@ function temporaryPassword() {
   return `${group()}-${group()}-${group()}`;
 }
 
-export type PublicUser = Pick<UserRow, 'id' | 'name' | 'email' | 'phone' | 'role'> & { createdAt: string };
+export type PublicUser = Pick<UserRow, 'id' | 'name' | 'email' | 'phone' | 'role'> & { createdAt: string; emailVerified: boolean };
 
 const toPublic = (u: UserRow): PublicUser => ({
   id: u.id,
@@ -58,6 +77,7 @@ const toPublic = (u: UserRow): PublicUser => ({
   phone: u.phone,
   role: u.role,
   createdAt: u.created_at,
+  emailVerified: !!u.email_verified_at,
 });
 
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
@@ -74,6 +94,8 @@ export function createApp(opts: AppOptions) {
   const signInIpLimiter = opts.signInIpLimiter ?? new RateLimiter({ max: 50, windowMs: 15 * 60 * 1000 });
   // Generous enough for a clinic registering patients at reception over one shared Wi-Fi.
   const signUpLimiter = opts.signUpLimiter ?? new RateLimiter({ max: 20, windowMs: 60 * 60 * 1000 });
+  // Per account, on top of the one-minute gap between codes.
+  const resendCodeLimiter = opts.resendCodeLimiter ?? new RateLimiter({ max: 5, windowMs: 60 * 60 * 1000 });
 
   const app = express();
   app.disable('x-powered-by');
@@ -201,6 +223,35 @@ export function createApp(opts: AppOptions) {
 
   const clientKey = (req: Request) => req.ip ?? 'unknown';
 
+  /** Emails the account a fresh code (any earlier code stops working). False if sending failed. */
+  async function sendVerificationCode(user: UserRow, purpose: CodePurpose = 'signup', to = user.email): Promise<boolean> {
+    const code = issueCode(db, user.id, { purpose, newEmail: purpose === 'email_change' ? to : undefined });
+    try {
+      await opts.mailer.send(verificationEmail({ to, name: user.name, code, expiresInMinutes: CODE_TTL_MS / 60_000, purpose }));
+      return true;
+    } catch (err) {
+      console.error('Could not send the verification email', err);
+      // Nobody received it: don't hold the person to the resend wait for a code they never got.
+      discardCode(db, user.id, purpose);
+      return false;
+    }
+  }
+
+  /** Turns a failed code check into the matching error response. */
+  function sendCodeError(res: Response, result: Exclude<CheckResult, { ok: true }>) {
+    const fail = (status: number, errCode: string, message: string) => sendError(res, status, errCode, message, { code: message });
+    switch (result.reason) {
+      case 'wrong':
+        return fail(400, 'invalid_code', `That code isn't right. ${result.attemptsLeft} ${result.attemptsLeft === 1 ? 'try' : 'tries'} left.`);
+      case 'too_many':
+        return fail(429, 'too_many_attempts', 'Too many wrong codes. Send yourself a new code.');
+      case 'expired':
+        return fail(400, 'code_expired', 'This code has expired. Send yourself a new code.');
+      case 'none':
+        return fail(400, 'code_expired', 'This code is no longer valid. Send yourself a new code.');
+    }
+  }
+
   api.post('/auth/signup', async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -232,11 +283,17 @@ export function createApp(opts: AppOptions) {
       }
 
       const email = normalizeEmail(input.email);
-      if (users.byEmail(db, email)) {
+      const existing = users.byEmail(db, email);
+      if (existing?.email_verified_at) {
         return sendError(res, 409, 'email_taken', 'An account with this email already exists.', {
           email: 'An account with this email already exists. Sign in instead?',
         });
       }
+      const passwordHash = await hashPassword(input.password);
+      // An account that never proved it owns this address doesn't keep it: whoever can verify it
+      // wins (e.g. someone else typed this email by mistake). It has no data until it's verified.
+      // (Re-checked here, after the slow hash: only ever removes a still-unverified account.)
+      db.prepare('DELETE FROM users WHERE email = ? AND email_verified_at IS NULL').run(email);
 
       const user = users.insert(db, {
         id: `patient-${crypto.randomUUID()}`,
@@ -244,12 +301,13 @@ export function createApp(opts: AppOptions) {
         email,
         phone: normalizePhone(input.phone)!,
         role: 'patient', // self sign-up can only ever create patients
-        password_hash: await hashPassword(input.password),
+        password_hash: passwordHash,
       });
 
-      createPatientProfile(db, user);
+      // Signed in, but limited to the verification step until the emailed code is entered.
       startSession(res, user.id, body.remember !== false);
-      res.status(201).json({ user: toPublic(user) });
+      const codeSent = await sendVerificationCode(user);
+      res.status(201).json({ user: toPublic(user), codeSent });
     } catch (err) {
       if (err instanceof ServerBusyError) return busy(res);
       // Two simultaneous sign-ups with the same email: the UNIQUE constraint is the final word.
@@ -296,7 +354,9 @@ export function createApp(opts: AppOptions) {
 
       signInLimiter.reset(key);
       startSession(res, user.id, body.remember === true);
-      res.json({ user: toPublic(user) });
+      // Not verified yet: they're taken to the code screen, so make sure a fresh code is on its way.
+      const codeSent = !user.email_verified_at && resendWaitSec(db, user.id) === 0 ? await sendVerificationCode(user) : undefined;
+      res.json({ user: toPublic(user), ...(codeSent !== undefined && { codeSent }) });
     } catch (err) {
       if (err instanceof ServerBusyError) return busy(res);
       next(err);
@@ -374,6 +434,165 @@ export function createApp(opts: AppOptions) {
     res.json({ user: toPublic(user) });
   });
 
+  // The signed-in (not yet verified) person enters the code from their email.
+  api.post('/auth/verify-email', (req, res) => {
+    const user = currentUser(req);
+    if (!user) return sendError(res, 401, 'unauthenticated', 'You are not signed in.');
+    if (user.email_verified_at) return res.json({ user: toPublic(user) });
+
+    const code = String(req.body?.code ?? '').replace(/\s+/g, '');
+    if (!isCodeFormat(code)) {
+      return sendError(res, 400, 'validation_failed', 'Enter the 6-digit code from the email.', {
+        code: 'Enter the 6-digit code from the email.',
+      });
+    }
+    const result = checkCode(db, user.id, code);
+    if (!result.ok) return sendCodeError(res, result);
+
+    users.markEmailVerified(db, user.id);
+    // Only verified patients join the clinic's patient list.
+    if (user.role === 'patient') createPatientProfile(db, user);
+    res.json({ user: toPublic(users.byId(db, user.id)!) });
+  });
+
+  api.post('/auth/verify-email/resend', async (req, res, next) => {
+    try {
+      const user = currentUser(req);
+      if (!user) return sendError(res, 401, 'unauthenticated', 'You are not signed in.');
+      if (user.email_verified_at) return sendError(res, 409, 'already_verified', 'Your email is already verified.');
+
+      const wait = resendWaitSec(db, user.id);
+      if (wait > 0) {
+        res.setHeader('Retry-After', String(wait));
+        return sendError(res, 429, 'resend_too_soon', `Please wait ${wait} seconds before asking for another code.`);
+      }
+      const limit = resendCodeLimiter.hit(user.id);
+      if (!limit.allowed) {
+        res.setHeader('Retry-After', String(limit.retryAfterSec));
+        return sendError(res, 429, 'rate_limited', `Too many codes requested. Try again in ${Math.ceil(limit.retryAfterSec / 60)} minute(s).`);
+      }
+
+      if (!(await sendVerificationCode(user))) {
+        return sendError(res, 503, 'email_failed', "We couldn't send the email just now. Please try again in a minute.");
+      }
+      res.json({ sentTo: user.email, resendAfterSec: RESEND_COOLDOWN_MS / 1000 });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── My profile: account details (name, mobile, email) ───────────────────
+  /** The signed-in, verified account, or sends the error and returns undefined. */
+  function verifiedUser(req: Request, res: Response): UserRow | undefined {
+    const user = currentUser(req);
+    if (!user) return void sendError(res, 401, 'unauthenticated', 'You are not signed in.');
+    if (!user.email_verified_at) return void sendError(res, 403, 'email_unverified', 'Please verify your email address to continue.');
+    return user;
+  }
+
+  api.post('/account/profile', (req, res) => {
+    const user = verifiedUser(req, res);
+    if (!user) return;
+    const name = String(req.body?.name ?? '');
+    const phone = String(req.body?.phone ?? '');
+    const fields: Record<string, string> = {};
+    const nameError = validateName(name);
+    if (nameError) fields.name = nameError;
+    const phoneError = validatePhone(phone);
+    if (phoneError) fields.phone = phoneError;
+    if (Object.keys(fields).length) return sendError(res, 400, 'validation_failed', 'Please correct the highlighted fields.', fields);
+
+    users.setNameAndPhone(db, user.id, normalizeName(name), normalizePhone(phone)!);
+    const updated = users.byId(db, user.id)!;
+    syncPatientProfile(db, updated);
+    res.json({ user: toPublic(updated) });
+  });
+
+  // Step 1 of changing email: confirm it's really them (password), then email a code to the new address.
+  api.post('/account/email', async (req, res, next) => {
+    try {
+      const user = verifiedUser(req, res);
+      if (!user) return;
+      const newEmailInput = String(req.body?.newEmail ?? '');
+      const password = String(req.body?.currentPassword ?? '');
+
+      const emailError = validateEmail(newEmailInput);
+      if (emailError) return sendError(res, 400, 'validation_failed', emailError, { newEmail: emailError });
+      const newEmail = normalizeEmail(newEmailInput);
+      if (newEmail === user.email) {
+        return sendError(res, 400, 'validation_failed', 'This is already your email address.', { newEmail: 'This is already your email address.' });
+      }
+      if (!password) return sendError(res, 400, 'validation_failed', 'Enter your current password.', { currentPassword: 'Enter your current password.' });
+
+      const attempt = signInLimiter.hit(`password|${user.id}`);
+      if (!attempt.allowed) {
+        res.setHeader('Retry-After', String(attempt.retryAfterSec));
+        return sendError(res, 429, 'rate_limited', `Too many attempts. Try again in ${Math.ceil(attempt.retryAfterSec / 60)} minute(s).`);
+      }
+      if (!(await verifyPassword(password, user.password_hash))) {
+        return sendError(res, 400, 'validation_failed', 'Your current password is incorrect.', {
+          currentPassword: 'Your current password is incorrect.',
+        });
+      }
+      signInLimiter.reset(`password|${user.id}`);
+
+      if (users.byEmail(db, newEmail)?.email_verified_at) {
+        return sendError(res, 409, 'email_taken', 'Another account already uses this email.', { newEmail: 'Another account already uses this email.' });
+      }
+      const wait = resendWaitSec(db, user.id, 'email_change');
+      if (wait > 0) {
+        res.setHeader('Retry-After', String(wait));
+        return sendError(res, 429, 'resend_too_soon', `Please wait ${wait} seconds before asking for another code.`);
+      }
+      const limit = resendCodeLimiter.hit(`email_change|${user.id}`);
+      if (!limit.allowed) {
+        res.setHeader('Retry-After', String(limit.retryAfterSec));
+        return sendError(res, 429, 'rate_limited', `Too many codes requested. Try again in ${Math.ceil(limit.retryAfterSec / 60)} minute(s).`);
+      }
+      if (!(await sendVerificationCode(user, 'email_change', newEmail))) {
+        return sendError(res, 503, 'email_failed', "We couldn't send the email just now. Please try again in a minute.");
+      }
+      res.json({ sentTo: newEmail, resendAfterSec: RESEND_COOLDOWN_MS / 1000 });
+    } catch (err) {
+      if (err instanceof ServerBusyError) return busy(res);
+      next(err);
+    }
+  });
+
+  // Step 2: the code from the new inbox moves the account to that address.
+  api.post('/account/email/confirm', (req, res) => {
+    const user = verifiedUser(req, res);
+    if (!user) return;
+    const code = String(req.body?.code ?? '').replace(/\s+/g, '');
+    if (!isCodeFormat(code)) {
+      return sendError(res, 400, 'validation_failed', 'Enter the 6-digit code from the email.', { code: 'Enter the 6-digit code from the email.' });
+    }
+    const result = checkCode(db, user.id, code, 'email_change');
+    if (!result.ok) return sendCodeError(res, result);
+    const newEmail = result.newEmail!;
+
+    // Someone may have claimed the address meanwhile: a verified account keeps it; an unverified one never owned it.
+    const holder = users.byEmail(db, newEmail);
+    if (holder?.email_verified_at && holder.id !== user.id) {
+      return sendError(res, 409, 'email_taken', 'Another account already uses this email.', { code: 'Another account already uses this email.' });
+    }
+    if (holder && holder.id !== user.id) db.prepare('DELETE FROM users WHERE id = ?').run(holder.id);
+
+    users.setVerifiedEmail(db, user.id, newEmail);
+    const updated = users.byId(db, user.id)!;
+    syncPatientProfile(db, updated);
+    res.json({ user: toPublic(updated) });
+  });
+
+  // App data stays locked until the account has verified its email.
+  api.use('/data', (req, res, next) => {
+    const user = currentUser(req);
+    if (user && !user.email_verified_at) {
+      return sendError(res, 403, 'email_unverified', 'Please verify your email address to continue.');
+    }
+    next();
+  });
+
   registerDataRoutes(api, { db, currentUser, sendError });
 
   api.use((_req, res) => sendError(res, 404, 'not_found', 'Not found.'));
@@ -389,8 +608,11 @@ export function createApp(opts: AppOptions) {
 
   app.use('/api', api);
 
-  // Housekeeping: drop expired sessions once an hour.
-  const sweep = setInterval(() => db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now()), 60 * 60 * 1000);
+  // Housekeeping: drop expired sessions and verification codes once an hour.
+  const sweep = setInterval(() => {
+    db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
+    db.prepare('DELETE FROM email_codes WHERE expires_at < ?').run(Date.now());
+  }, 60 * 60 * 1000);
   sweep.unref();
 
   return app;

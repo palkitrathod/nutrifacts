@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { KeyRound, LogOut, Mail, Phone, Shield, Stethoscope, UserCheck, X } from 'lucide-react';
+import { KeyRound, LogOut, Mail, Phone, Shield, Stethoscope, UserCheck, UserPen, X } from 'lucide-react';
 import { useNutrition } from '../context/NutritionContext';
 import { ChangePasswordForm } from './ChangePasswordForm';
 
@@ -7,9 +7,11 @@ interface AccountModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSignOut: () => Promise<void>;
+  /** Patients: opens My profile for editing. */
+  onOpenProfile?: () => void;
 }
 
-export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onSignOut }) => {
+export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onSignOut, onOpenProfile }) => {
   const { currentUser, isDietitian } = useNutrition();
   const [signingOut, setSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
@@ -109,6 +111,16 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
                 : 'Only you and Dt. Anchal can see your diet chart and health measurements.'}
             </span>
           </div>
+
+          {onOpenProfile && (
+            <button
+              type="button"
+              onClick={onOpenProfile}
+              className="w-full py-2.5 rounded-xl bg-[#3E6553] hover:bg-[#2D4C3C] text-white font-semibold text-sm flex items-center justify-center gap-2"
+            >
+              <UserPen className="w-4 h-4" aria-hidden="true" /> My profile
+            </button>
+          )}
 
           {changingPassword ? (
             <div className="border-t border-slate-100 pt-4">

@@ -1,20 +1,24 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { createApp, SESSION_COOKIE } from './app';
 import { DEMO_PASSWORD, openDb, seed, type Db } from './db';
 import { seedData } from './data';
+import { newPlanValidUntil, todayIso } from '../src/shared/plans';
+import type { MailMessage } from './mailer';
 
 let db: Db;
 let server: Server;
 let base: string;
+let sent: MailMessage[];
 
 beforeEach(async () => {
   db = openDb(':memory:');
   await seed(db, { demoUsers: true });
   seedData(db, { demoRecords: true });
-  const app = createApp({ db, secureCookies: false });
+  sent = [];
+  const app = createApp({ db, secureCookies: false, mailer: { send: async (m) => void sent.push(m) } });
   await new Promise<void>((resolve) => {
     server = app.listen(0, '127.0.0.1', () => resolve());
   });
@@ -136,7 +140,18 @@ describe('writing data', () => {
       packageTitle: pkg.title,
       amountInr: pkg.priceInr,
       status: 'successful',
+      createdAt: todayIso(),
+      validUntil: newPlanValidUntil(pkg.validityDays, todayIso()),
       ...overrides,
+    });
+
+    it('rejects a plan that would last longer than paid for', async () => {
+      const priya = await signIn(PRIYA);
+      const pkg = (await priya.load()).packages.find((p: any) => p.isActive);
+      const res = await priya.save([{ collection: 'payments', id: 'pay-test', data: payment(pkg, { validUntil: '2030-01-01' }) }]);
+      expect(res.status).toBe(400);
+      const backdated = await priya.save([{ collection: 'payments', id: 'pay-test', data: payment(pkg, { createdAt: '2020-01-01' }) }]);
+      expect(backdated.status).toBe(400);
     });
 
     it('accepts a purchase at the current price', async () => {
@@ -158,6 +173,145 @@ describe('writing data', () => {
       await priya.save([{ collection: 'payments', id: 'pay-test', data: payment(pkg) }]);
       const res = await priya.save([{ collection: 'payments', id: 'pay-test', data: payment(pkg, { status: 'refunded' }) }]);
       expect(res.status).toBe(403);
+    });
+
+    it('rejects an upgrade credit on an ordinary purchase', async () => {
+      const priya = await signIn(PRIYA);
+      const pkg = (await priya.load()).packages.find((p: any) => p.isActive);
+      const res = await priya.save([{ collection: 'payments', id: 'pay-test', data: payment(pkg, { amountInr: pkg.priceInr - 100, creditInr: 100 }) }]);
+      expect(res.status).toBe(400);
+    });
+
+    describe('upgrades', () => {
+      // Priya's seeded plan: Monthly Nutrition Care, ₹2499, 2026-10-10 → 2026-11-10 (32 days).
+      // On 2026-10-22, 20 days are left: credit ⌊2499 × 20 / 32⌋ = ₹1561.
+      const PREMIUM = { id: 'pkg-premium', title: 'Premium Care', priceInr: 4999, durationLabel: '30 days', validityDays: 30, isActive: true, tagline: '', description: '', inclusions: [], terms: '', category: 'monthly_care' };
+      const upgrade = (overrides: object = {}) =>
+        payment(PREMIUM, { amountInr: 4999 - 1561, listPriceInr: 4999, creditInr: 1561, upgradeFromPaymentId: 'pay-001', createdAt: '2026-10-22', validUntil: '2026-11-21', ...overrides });
+
+      beforeEach(async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-10-22T09:00:00Z'));
+        const anchal = await signIn(ANCHAL);
+        expect((await anchal.save([{ collection: 'packages', id: PREMIUM.id, data: PREMIUM }])).status).toBe(200);
+      });
+      afterEach(() => vi.useRealTimers());
+
+      it('accepts the price minus the credit for the unused days', async () => {
+        const priya = await signIn(PRIYA);
+        expect((await priya.save([{ collection: 'payments', id: 'pay-test', data: upgrade() }])).status).toBe(200);
+      });
+
+      it.each([
+        ['a bigger credit', { amountInr: 4999 - 2000, creditInr: 2000 }],
+        ['a missing list price', { listPriceInr: undefined }],
+        ['another patient’s plan', { upgradeFromPaymentId: 'pay-002' }],
+        ['a plan that does not exist', { upgradeFromPaymentId: 'pay-nope' }],
+      ])('rejects %s', async (_label, overrides) => {
+        const priya = await signIn(PRIYA);
+        expect((await priya.save([{ collection: 'payments', id: 'pay-test', data: upgrade(overrides) }])).status).toBe(400);
+      });
+
+      it('credits the same plan only once', async () => {
+        const priya = await signIn(PRIYA);
+        expect((await priya.save([{ collection: 'payments', id: 'pay-up-1', data: upgrade({ id: 'pay-up-1' }) }])).status).toBe(200);
+        // pay-001 is no longer the current plan, so it can't be credited again.
+        expect((await priya.save([{ collection: 'payments', id: 'pay-up-2', data: upgrade({ id: 'pay-up-2' }) }])).status).toBe(400);
+      });
+
+      it('rejects an "upgrade" to a cheaper plan', async () => {
+        const priya = await signIn(PRIYA);
+        const cheap = (await priya.load()).packages.find((p: any) => p.isActive && p.priceInr < 2499);
+        const res = await priya.save([{ collection: 'payments', id: 'pay-test', data: payment(cheap, { amountInr: 0, listPriceInr: cheap.priceInr, creditInr: cheap.priceInr, upgradeFromPaymentId: 'pay-001' }) }]);
+        expect(res.status).toBe(400);
+      });
+
+      it('gives no credit once the plan has ended', async () => {
+        vi.setSystemTime(new Date('2026-11-11T09:00:00Z'));
+        const priya = await signIn(PRIYA);
+        expect((await priya.save([{ collection: 'payments', id: 'pay-test', data: upgrade() }])).status).toBe(400);
+      });
+
+      it('credits a Starter Consultation in full towards a bigger plan', async () => {
+        const priya = await signIn(PRIYA);
+        const plans = (await priya.load()).packages;
+        const starter = plans.find((p: any) => p.id === 'pkg-basic-consultation');
+        const monthly = plans.find((p: any) => p.id === 'pkg-monthly-nutrition-care');
+        expect(starter.creditInFull).toBe(true);
+        expect((await priya.save([{ collection: 'payments', id: 'pay-starter', data: payment(starter, { id: 'pay-starter' }) }])).status).toBe(200);
+        // A week later, all ₹499 still counts (not just the unused days).
+        vi.setSystemTime(new Date('2026-10-29T09:00:00Z'));
+        const later = await signIn(PRIYA); // the earlier session has expired by then
+        const up = (credit: number) =>
+          payment(monthly, { id: 'pay-up', amountInr: 2499 - credit, listPriceInr: 2499, creditInr: credit, upgradeFromPaymentId: 'pay-starter' });
+        expect((await later.save([{ collection: 'payments', id: 'pay-up', data: up(250) }])).status).toBe(400);
+        expect((await later.save([{ collection: 'payments', id: 'pay-up', data: up(499) }])).status).toBe(200);
+      });
+    });
+
+    describe('early renewal', () => {
+      // Priya's plan (pay-001) ends 2026-11-10; early renewal opens 7 days before, on 2026-11-04.
+      const renewal = (overrides: object = {}) => ({
+        id: 'pay-renew',
+        patientId: 'patient-priya',
+        packageId: 'pkg-monthly-nutrition-care',
+        packageTitle: 'Monthly Nutrition Care',
+        amountInr: 2499,
+        status: 'successful',
+        createdAt: todayIso(),
+        renewalOfPaymentId: 'pay-001',
+        bonusDays: 7,
+        validUntil: '2026-12-17', // 2026-11-10 + 30 days + 7 bonus days
+        ...overrides,
+      });
+      beforeEach(() => vi.useFakeTimers({ toFake: ['Date'] }));
+      afterEach(() => vi.useRealTimers());
+
+      it('starts after the current plan, with 7 days free, in the last 7 days', async () => {
+        vi.setSystemTime(new Date('2026-11-05T09:00:00Z'));
+        const priya = await signIn(PRIYA);
+        expect((await priya.save([{ collection: 'payments', id: 'pay-renew', data: renewal() }])).status).toBe(200);
+      });
+
+      it.each([
+        ['too early', '2026-10-22T09:00:00Z', {}],
+        ['more bonus days', '2026-11-05T09:00:00Z', { bonusDays: 14, validUntil: '2026-12-24' }],
+        ['a discounted price', '2026-11-05T09:00:00Z', { amountInr: 1999 }],
+        ['longer access', '2026-11-05T09:00:00Z', { validUntil: '2027-01-01' }],
+      ])('rejects %s', async (_label, now, overrides) => {
+        vi.setSystemTime(new Date(now));
+        const priya = await signIn(PRIYA);
+        expect((await priya.save([{ collection: 'payments', id: 'pay-renew', data: renewal(overrides) }])).status).toBe(400);
+      });
+    });
+  });
+
+  describe('profile photo', () => {
+    const tinyJpeg = 'data:image/jpeg;base64,' + 'A'.repeat(4000);
+    async function saveAvatar(avatar: unknown) {
+      const priya = await signIn(PRIYA);
+      const profile = (await priya.load()).patients[0];
+      return priya.save([{ collection: 'patients', id: 'patient-priya', data: { ...profile, avatar } }]);
+    }
+
+    it('accepts a small uploaded image, and removing it', async () => {
+      expect((await saveAvatar(tinyJpeg)).status).toBe(200);
+      expect((await saveAvatar(undefined)).status).toBe(200);
+    });
+
+    it.each([
+      ['a link to another site', 'https://evil.example.com/pixel.png'],
+      ['an SVG (can carry scripts)', 'data:image/svg+xml;base64,PHN2Zz4='],
+      ['an oversized image', 'data:image/jpeg;base64,' + 'A'.repeat(400_000)],
+      ['something that is not text', 42],
+    ])('rejects %s', async (_label, avatar) => {
+      expect((await saveAvatar(avatar)).status).toBe(400);
+    });
+
+    it('keeps an existing photo that is saved unchanged', async () => {
+      const priya = await signIn(PRIYA);
+      const profile = (await priya.load()).patients[0];
+      expect((await priya.save([{ collection: 'patients', id: 'patient-priya', data: { ...profile, heightCm: 164 } }])).status).toBe(200);
     });
   });
 
@@ -221,10 +375,26 @@ describe('production seeding', () => {
     const counts = fresh.prepare('SELECT collection, COUNT(*) AS n FROM records GROUP BY collection').all() as Array<{ collection: string }>;
     expect(counts.map((c) => c.collection)).toEqual(['packages']);
   });
+
+  it('updates an older price list to the new plans, keeping the clinic’s prices and on/off switches', () => {
+    const old = openDb(':memory:');
+    const put = (id: string, data: object) =>
+      old.prepare('INSERT INTO records (collection, id, owner, data, updated_at) VALUES (?, ?, NULL, ?, 0)').run('packages', id, JSON.stringify(data));
+    put('pkg-basic-consultation', { id: 'pkg-basic-consultation', title: 'Basic Nutrition Consultation', priceInr: 549, isActive: false });
+    put('pkg-custom', { id: 'pkg-custom', title: 'Clinic’s own plan', priceInr: 1234, isActive: true });
+    seedData(old, { demoRecords: false });
+    const pkg = (id: string) => JSON.parse((old.prepare("SELECT data FROM records WHERE collection = 'packages' AND id = ?").get(id) as { data: string }).data);
+    expect(pkg('pkg-basic-consultation')).toMatchObject({ title: 'Starter Consultation', priceInr: 549, isActive: false, creditInFull: true });
+    expect(pkg('pkg-quarterly-nutrition-care')).toMatchObject({ priceInr: 5999, validityDays: 90 });
+    expect(pkg('pkg-custom')).toEqual({ id: 'pkg-custom', title: 'Clinic’s own plan', priceInr: 1234, isActive: true });
+    // Running it again changes nothing.
+    seedData(old, { demoRecords: false });
+    expect(pkg('pkg-basic-consultation').priceInr).toBe(549);
+  });
 });
 
 describe('sign-up creates the patient profile on the server', () => {
-  it('the dietitian sees a new patient immediately, with a welcome notification for the patient', async () => {
+  it('the dietitian sees a new patient once their email is verified, with a welcome notification for the patient', async () => {
     const res = await fetch(`${base}/api/auth/signup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -232,10 +402,19 @@ describe('sign-up creates the patient profile on the server', () => {
     });
     expect(res.status).toBe(201);
     const { user } = await res.json();
+    const cookie = res.headers.getSetCookie()[0].split(';')[0];
+    expect((await (await signIn(ANCHAL)).load()).patients.some((p: any) => p.id === user.id)).toBe(false);
+
+    const code = sent[0].text.match(/email address: (\d{6})/)![1];
+    const verified = await fetch(`${base}/api/auth/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ code }),
+    });
+    expect(verified.status).toBe(200);
     const admin = await (await signIn(ANCHAL)).load();
     expect(admin.patients.find((p: any) => p.id === user.id)).toMatchObject({ name: 'Fresh Patient', phone: '+91 98765 43210', role: 'patient' });
 
-    const cookie = res.headers.getSetCookie()[0].split(';')[0];
     const own = await (await fetch(`${base}/api/data`, { headers: { Cookie: cookie } })).json();
     expect(own.notifications.map((n: any) => n.id)).toContain(`notif-welcome-${user.id}`);
   });

@@ -5,6 +5,9 @@ import path from 'node:path';
 const PORT = 4173;
 // A throwaway database per run, so tests never touch real data.
 const dbPath = path.join(os.tmpdir(), `nutrifacts-e2e-${Date.now()}.db`);
+// Emails (verification codes) are saved here instead of sent; e2e/mail.ts reads them. Set on
+// process.env so test workers, which load this file too, see the same folder.
+process.env.MAIL_OUTBOX_DIR ??= path.join(os.tmpdir(), `nutrifacts-e2e-outbox-${PORT}`);
 
 // Set E2E_BASE_URL to test an already-running server (e.g. `npm run dev`) instead of building one.
 const externalBaseUrl = process.env.E2E_BASE_URL;
@@ -37,6 +40,8 @@ export default defineConfig({
     env: {
       PORT: String(PORT),
       DATABASE_PATH: dbPath,
+      MAIL_OUTBOX_DIR: process.env.MAIL_OUTBOX_DIR,
+      MAIL_TRANSPORT: 'outbox', // never email real addresses, even if .env has SMTP settings
       SEED_DEMO_USERS: 'true',
       COOKIE_SECURE: 'false',
       SIGNUPS_PER_HOUR_PER_IP: '1000',

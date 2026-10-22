@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { verifyInBrowser } from './mail';
 
 const DEMO_PASSWORD = 'Demo@1234';
 
@@ -16,10 +17,11 @@ async function signUpInBrowser(page: Page, email: string) {
   await page.getByLabel('Confirm password', { exact: true }).fill('Healthy123');
   await page.getByRole('checkbox', { name: /i agree/i }).check();
   await page.getByRole('button', { name: /create account/i }).click();
+  await verifyInBrowser(page, email);
   await expect(page).toHaveURL('/app');
 }
 
-const openTrackTab = (page: Page) => page.getByRole('button', { name: /^Track$/ }).first().click();
+const openTrackTab = (page: Page) => page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Track', exact: true }).click();
 
 test('patient data is saved on the server: survives reload, follows the patient to another device, and stays private', async ({
   page,
@@ -101,8 +103,8 @@ test('a demo patient sees only their own records in the app', async ({ page }) =
 });
 
 for (const account of [
-  { email: 'priya.sharma@example.com', tabs: ['Diet Chart', 'Plans', 'Track', 'Profile', 'Home'] },
-  { email: 'anchaldewan380@gmail.com', tabs: ['Diet Plans', 'Pricing', 'Progress', 'Admin', 'Home'] },
+  { email: 'priya.sharma@example.com', tabs: ['Diet Chart', 'My Plans', 'Track', 'Appointments', 'My Profile', 'Home'] },
+  { email: 'anchaldewan380@gmail.com', tabs: ['Diet Plans', 'Pricing', 'Progress', 'Appointments', 'Admin', 'Home'] },
 ]) {
   test(`every tab loads without errors for ${account.email}`, async ({ page }) => {
     const problems: string[] = [];
@@ -117,7 +119,7 @@ for (const account of [
     await expect(page).toHaveURL('/app');
 
     for (const tab of account.tabs) {
-      await page.getByRole('button', { name: new RegExp(`^${tab}$`) }).first().click();
+      await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: tab, exact: true }).click();
       await page.waitForTimeout(400); // let any auto-save fire
     }
     await expect(page.getByRole('alert')).toHaveCount(0);

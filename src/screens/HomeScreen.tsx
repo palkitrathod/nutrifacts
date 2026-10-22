@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import {
+  BadgePercent,
+  CircleCheck,
   Sparkles,
   Utensils,
   TrendingUp,
@@ -20,8 +22,10 @@ import {
 } from 'lucide-react';
 import { useNutrition, trackerForToday } from '../context/NutritionContext';
 import { ServiceIcon, serviceTheme } from '../components/ServiceIcon';
+import { lengthSaving, planFamilies, planHook, planIcon, sortPlans } from '../components/PlanCard';
 import { IMAGES } from '../data/mockData';
-import { NutritionService, NutritionPackage } from '../types/nutrition';
+import { NutritionService, NutritionPackage, ServiceGroup } from '../types/nutrition';
+import { ServiceCard, ServiceDetailsDialog, ServiceGroupTabs } from '../components/ServiceCatalog';
 
 interface HomeScreenProps {
   onNavigateTab: (tab: string) => void;
@@ -48,8 +52,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     patients,
     appointments,
   } = useNutrition();
+  const homePlans = sortPlans(packages.filter((p) => p.isActive));
+  const [lengthChoice, setLengthChoice] = useState<Record<string, string>>({});
 
   const [selectedService, setSelectedService] = useState<NutritionService | null>(null);
+  const [serviceGroup, setServiceGroup] = useState<ServiceGroup>('everyday');
 
   const currentChart = getCurrentUserDietChart();
   const todayKey = currentUser.id;
@@ -63,7 +70,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const pendingMeal = currentChart?.meals.find((m) => !tracker.mealsChecked[m.id]) || currentChart?.meals[0];
 
   return (
-    <div className="flex-1 pb-16 space-y-5 px-4 pt-4 md:px-8 md:pt-6 max-w-5xl mx-auto w-full">
+    <div className="flex-1 pb-16 space-y-5 px-4 pt-4 md:px-8 md:pt-6 max-w-5xl xl:max-w-6xl 2xl:max-w-7xl mx-auto w-full">
       
       {/* Welcome Banner */}
       <section className="bg-gradient-to-br from-[#3E6553] via-[#48735F] to-[#2D4C3C] rounded-2xl md:rounded-3xl p-5 md:p-7 text-white shadow-md relative overflow-hidden">
@@ -487,213 +494,168 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {packages.slice(0, 3).map((pkg) => (
-            <div
-              key={pkg.id}
-              className={`p-4 rounded-2xl bg-white border flex flex-col justify-between transition-all ${
-                pkg.isPopular
-                  ? 'border-emerald-500 shadow-md ring-2 ring-emerald-500/20'
-                  : 'border-slate-200 hover:border-emerald-200'
-              }`}
-            >
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">
-                    {pkg.durationLabel}
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 pt-2">
+          {planFamilies(homePlans).map((family) => {
+            const pkg = family.find((p) => p.id === lengthChoice[family[0].id]) ?? family.find((p) => p.bundleOf?.months === 3) ?? family[0];
+            const withLengths = family.length > 1;
+            const Icon = planIcon(family[0]);
+            const hook = planHook(pkg, homePlans, withLengths);
+            const HookIcon = hook.icon;
+            const saving = lengthSaving(pkg, family);
+            const best = Math.max(...family.map((p) => lengthSaving(p, family).pct));
+            // A plan offered in several lengths is "Most popular"; "Best value" is shown on its longest length instead.
+            const bestValue = !withLengths && !!pkg.isBestValue;
+            const highlighted = bestValue || family.some((p) => p.isPopular);
+            return (
+              <div
+                key={family[0].id}
+                className={`relative p-4 rounded-2xl bg-white border flex flex-col justify-between transition-all ${
+                  bestValue
+                    ? 'border-amber-300 shadow-md ring-1 ring-amber-200'
+                    : pkg.isPopular
+                      ? 'border-emerald-500 shadow-md ring-2 ring-emerald-500/20'
+                      : 'border-slate-200 hover:border-emerald-200'
+                }`}
+              >
+                {highlighted && (
+                  <span className={`absolute -top-2.5 left-4 inline-flex items-center gap-1 text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${bestValue ? 'bg-amber-400 text-amber-950' : 'bg-[#3E6553] text-white'}`}>
+                    <Sparkles className="w-2.5 h-2.5" aria-hidden="true" /> {bestValue ? 'Best value' : 'Most popular'}
                   </span>
-                  {pkg.isPopular && (
-                    <span className="text-[9px] bg-[#3E6553] text-white px-2 py-0.5 rounded-full font-bold uppercase">
-                      Recommended
-                    </span>
+                )}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${bestValue ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-[#3E6553]'}`}>
+                      <Icon className="w-4.5 h-4.5" aria-hidden="true" />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="block text-[10px] font-bold text-emerald-800 uppercase tracking-wider truncate">{pkg.durationLabel}</span>
+                      <h3 className="font-bold text-sm text-slate-900 leading-snug">{withLengths ? family[0].familyTitle ?? family[0].title : pkg.title}</h3>
+                    </div>
+                  </div>
+
+                  {withLengths && (
+                    <div role="radiogroup" aria-label="Choose how long" className="flex gap-1 p-1 rounded-lg bg-slate-100">
+                      {family.map((p) => {
+                        const s = lengthSaving(p, family);
+                        const active = p.id === pkg.id;
+                        return (
+                          <button
+                            key={p.id}
+                            type="button"
+                            role="radio"
+                            aria-checked={active}
+                            onClick={() => setLengthChoice((c) => ({ ...c, [family[0].id]: p.id }))}
+                            className={`flex-1 rounded-md px-1 py-1 text-[11px] font-semibold transition-colors ${active ? 'bg-white text-[#2D4C3C] shadow-xs' : 'text-slate-600 hover:bg-white/70'}`}
+                          >
+                            {s.months === 1 ? '1 mo' : `${s.months} mo`}
+                            {s.pct > 0 && <span className={`ml-1 text-[10px] font-bold ${s.pct === best ? 'text-amber-700' : 'text-amber-600'}`}>−{s.pct}%</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
                   )}
+
+                  <div className="flex flex-wrap items-baseline gap-x-1.5">
+                    <span className="text-2xl font-bold text-[#2D4C3C]" style={{ fontFamily: "'Playfair Display', serif" }}>
+                      ₹{pkg.priceInr.toLocaleString('en-IN')}
+                    </span>
+                    <span className="text-[11px] text-slate-400">{saving.months > 1 ? `for ${saving.months} months` : `for ${pkg.validityDays} days`}</span>
+                    {saving.pct > 0 && (
+                      <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-400 text-amber-950 font-bold px-2 py-0.5 text-[10px]">
+                        <BadgePercent className="w-3 h-3" aria-hidden="true" /> You save {saving.pct}%
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="flex items-start gap-1.5 rounded-lg bg-emerald-50 border border-emerald-100 px-2.5 py-2 text-[11px] font-medium text-emerald-900">
+                    <HookIcon className="w-3.5 h-3.5 shrink-0 mt-px text-[#3E6553]" aria-hidden="true" />
+                    <span>{hook.text}</span>
+                  </p>
+
+                  <ul className="space-y-1 text-[11px] text-slate-600">
+                    {pkg.inclusions.slice(0, 2).map((inc, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <CircleCheck className="w-3.5 h-3.5 text-[#3E6553] shrink-0 mt-px" aria-hidden="true" />
+                        <span>{inc}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
 
-                <h3 className="font-bold text-sm text-slate-900">{pkg.title}</h3>
-                <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
-                  {pkg.tagline}
-                </p>
-
-                <div className="pt-2 flex items-baseline gap-1">
-                  <span className="text-2xl font-extrabold font-mono text-slate-900">
-                    ₹{pkg.priceInr}
-                  </span>
-                  <span className="text-[11px] text-slate-400 font-medium">/ INR</span>
+                <div className="pt-3 mt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onOpenCheckout) onOpenCheckout(pkg);
+                      else onNavigateTab('plans');
+                    }}
+                    className={`w-full py-2.5 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 transition-all ${
+                      highlighted
+                        ? 'bg-[#3E6553] hover:bg-[#2D4C3C] text-white shadow-xs'
+                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-950 border border-emerald-200'
+                    }`}
+                  >
+                    <CreditCard className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Select & Pay Online</span>
+                  </button>
                 </div>
-
-                <ul className="space-y-1 text-[11px] text-slate-600 pt-1">
-                  {pkg.inclusions.slice(0, 2).map((inc, i) => (
-                    <li key={i} className="flex items-center gap-1.5">
-                      <Check className="w-3 h-3 text-emerald-700 shrink-0" />
-                      <span className="truncate">{inc}</span>
-                    </li>
-                  ))}
-                </ul>
               </div>
-
-              <div className="pt-3 mt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (onOpenCheckout) onOpenCheckout(pkg);
-                    else onNavigateTab('plans');
-                  }}
-                  className={`w-full py-2.5 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 transition-all ${
-                    pkg.isPopular
-                      ? 'bg-[#3E6553] hover:bg-[#325243] text-white shadow-xs'
-                      : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-950 border border-emerald-200'
-                  }`}
-                >
-                  <CreditCard className="w-3.5 h-3.5" />
-                  <span>Select & Pay Online</span>
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </section>
 
-      {/* Clinical Nutrition Services Showcase */}
-      {/* @container: columns follow the space the app actually has (phone frame or desktop), not the window. */}
+      {/* Nutrition programs: 15 programs in 4 categories */}
+      {/* @container: columns follow the space the app actually has, not the window. */}
       <section className="@container space-y-3 pt-2">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-bold text-slate-900 tracking-tight">
-              Clinical Nutrition Services
-            </h2>
-            <p className="text-xs text-slate-500">
-              Evidence-based dietary protocols tailored to your clinical lab parameters
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => onOpenBookAppointment()}
-            className="text-xs text-[#3E6553] font-semibold hover:underline hidden sm:block"
-          >
-            Explore all programs &rarr;
-          </button>
+        <div>
+          <h2 className="text-base font-bold text-slate-900 tracking-tight">Nutrition Programs</h2>
+          <p className="text-xs text-slate-500">15 programs built around your goals, food preferences, routine and reports</p>
         </div>
 
-        <div className="grid grid-cols-1 @lg:grid-cols-2 @4xl:grid-cols-3 gap-3">
-          {services.map((svc) => (
+        <ServiceGroupTabs value={serviceGroup} onChange={setServiceGroup} services={services} />
+
+        <div id={`programs-${serviceGroup}`} role="tabpanel" aria-labelledby={`programs-tab-${serviceGroup}`} className="grid grid-cols-1 @lg:grid-cols-2 @4xl:grid-cols-3 gap-3">
+          {services
+            .filter((svc) => svc.group === serviceGroup)
+            .map((svc) => (
+              <ServiceCard
+                key={svc.id}
+                svc={svc}
+                onDetails={() => setSelectedService(svc)}
+                action={(months) => (
+                  <button
+                    type="button"
+                    onClick={() => onOpenBookAppointment(months > 1 ? `${svc.title} (${months} months)` : svc.title)}
+                    className="py-2 rounded-xl text-xs font-semibold bg-[#3E6553] hover:bg-[#2D4C3C] text-white flex items-center justify-center gap-1"
+                  >
+                    <Calendar className="w-3.5 h-3.5" aria-hidden="true" /> {svc.assessmentFirst ? 'Book assessment' : 'Book'}
+                  </button>
+                )}
+              />
+            ))}
+        </div>
+      </section>
+
+      {selectedService && (
+        <ServiceDetailsDialog
+          svc={selectedService}
+          onClose={() => setSelectedService(null)}
+          action={
             <button
               type="button"
-              key={svc.id}
-              onClick={() => setSelectedService(svc)}
-              className="text-left p-4 rounded-2xl bg-white border border-slate-200 hover:border-emerald-300 hover:shadow-sm transition-[border-color,box-shadow] cursor-pointer flex flex-col justify-between group"
+              onClick={() => {
+                const svc = selectedService.title;
+                setSelectedService(null);
+                onOpenBookAppointment(svc);
+              }}
+              className="px-5 py-2.5 rounded-xl bg-[#3E6553] hover:bg-[#2D4C3C] text-white font-semibold text-xs flex items-center gap-1.5 shadow-sm"
             >
-              <div className="space-y-2">
-                <div className="flex items-center gap-2.5">
-                  <span className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${serviceTheme(svc.iconName).badge}`}>
-                    <ServiceIcon iconName={svc.iconName} className="w-[18px] h-[18px]" />
-                  </span>
-                  <h3 className="font-bold text-sm text-slate-900 group-hover:text-[#3E6553] transition-colors">
-                    {svc.title}
-                  </h3>
-                </div>
-                <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
-                  {svc.tagline}
-                </p>
-                <div className="flex items-start justify-between gap-3 text-[11px]">
-                  <span className="font-semibold text-emerald-800 uppercase tracking-wider min-w-0">{svc.duration}</span>
-                  <span className="font-mono font-bold text-slate-900 whitespace-nowrap">{svc.priceDisplay}</span>
-                </div>
-              </div>
-
-              <div className="pt-3 mt-2 border-t border-slate-100 flex items-center justify-between text-xs w-full">
-                <span className="text-slate-500 text-[11px]">View protocol</span>
-                <span className="text-[#3E6553] font-semibold flex items-center gap-0.5 group-hover:translate-x-0.5 transition-transform">
-                  Details <ChevronRight className="w-3.5 h-3.5" />
-                </span>
-              </div>
+              <Calendar className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Book Consultation</span>
             </button>
-          ))}
-        </div>
-      </section>
-
-      {/* Service Detail Modal */}
-      {selectedService && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
-            <div className="bg-[#3E6553] text-white px-5 py-4 flex items-center justify-between">
-              <div>
-                <h3 className="font-bold text-sm">{selectedService.title}</h3>
-                <p className="text-xs text-emerald-100">{selectedService.subtitle}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedService(null)}
-                className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-5 overflow-y-auto space-y-4 text-xs">
-              <div className="p-3 bg-emerald-50 rounded-xl text-emerald-950 border border-emerald-100">
-                <p className="font-medium">{selectedService.tagline}</p>
-              </div>
-
-              <div>
-                <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[11px] mb-1.5">
-                  Dietary Philosophy
-                </h4>
-                <p className="text-slate-600 leading-relaxed">
-                  {selectedService.dietaryPhilosophy}
-                </p>
-              </div>
-
-              <div>
-                <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[11px] mb-1.5">
-                  Ideal For
-                </h4>
-                <ul className="space-y-1 text-slate-600">
-                  {selectedService.idealFor.map((item, idx) => (
-                    <li key={idx} className="flex items-start gap-1.5">
-                      <span className="text-emerald-700 font-bold">✓</span>
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div>
-                <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[11px] mb-1.5">
-                  What&apos;s Included In This Program
-                </h4>
-                <ul className="space-y-1 text-slate-600">
-                  {selectedService.whatIsIncluded.map((item, idx) => (
-                    <li key={idx} className="flex items-start gap-1.5">
-                      <span className="text-emerald-700 font-bold">•</span>
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                <div>
-                  <span className="text-[11px] text-slate-500 block">Consultation Fee</span>
-                  <span className="text-sm font-bold text-slate-900 font-mono">
-                    {selectedService.priceDisplay}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const svc = selectedService.title;
-                    setSelectedService(null);
-                    onOpenBookAppointment(svc);
-                  }}
-                  className="px-4 py-2.5 rounded-xl bg-[#3E6553] hover:bg-[#325243] text-white font-medium text-xs flex items-center gap-1.5 shadow-sm"
-                >
-                  <Calendar className="w-3.5 h-3.5" />
-                  <span>Book Consultation</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+          }
+        />
       )}
 
     </div>

@@ -32,6 +32,8 @@ export interface User {
   phone: string;
   role: UserRole;
   avatar?: string;
+  /** YYYY-MM-DD. When set, `age` is derived from it. */
+  dateOfBirth?: string;
   age?: number;
   gender?: 'Female' | 'Male' | 'Other';
   heightCm?: number;
@@ -47,6 +49,13 @@ export interface User {
   joinedDate: string;
   followUpDate?: string;
   assignedProgram?: string;
+  /** A downgrade / switch chosen on My Plans, starting when the current plan ends. */
+  scheduledPlanChange?: {
+    packageId: string;
+    packageTitle: string;
+    /** YYYY-MM-DD, the day after the current plan ends. */
+    effectiveDate: string;
+  };
 }
 
 export type MealTiming =
@@ -201,7 +210,21 @@ export interface NutritionService {
   whatIsIncluded: string[];
   dietaryPhilosophy: string;
   priceDisplay: string;
+  /** Catalogue category (tabs on the home page). */
+  group: ServiceGroup;
+  /** 1-month price; absent when the program is priced after an assessment. */
+  priceInr?: number;
+  /** Consultations included in the 1-month program. */
+  consultations?: number;
+  /** Optional 3-month price (about 20% less than three months). */
+  quarterlyPriceInr?: number;
+  /** Optional 6-month price (about 27% less than six months). */
+  halfYearlyPriceInr?: number;
+  /** Clinically complex: a personalised quote follows a first assessment. */
+  assessmentFirst?: boolean;
 }
+
+export type ServiceGroup = 'everyday' | 'conditions' | 'specialised' | 'medical';
 
 export interface AppNotification {
   id: string;
@@ -238,6 +261,20 @@ export interface NutritionPackage {
   inclusions: string[];
   terms: string;
   category: 'consultation' | 'diet_plan' | 'monthly_care' | 'specialized';
+  /** Display order, lowest first. */
+  sortOrder?: number;
+  /** "Best value" ribbon (isPopular is "Most popular"). */
+  isBestValue?: boolean;
+  /** While this plan is running, its full price counts towards a bigger plan (not just the unused days). */
+  creditInFull?: boolean;
+  /** A multi-month bundle of another plan: shown as "₹X/month · save ₹Y". */
+  bundleOf?: { packageId: string; months: number };
+  /** On a plan with longer bundles: the name of the card that offers all its lengths (e.g. "Nutrition Care"). */
+  familyTitle?: string;
+  /** Plainly stated limits ("Good to know"), so nobody buys the wrong plan. */
+  notIncluded?: string[];
+  /** Version of the clinic's own catalogue entry; plans the dietitian creates have none. */
+  catalogVersion?: number;
 }
 
 export interface PackagePayment {
@@ -258,4 +295,13 @@ export interface PackagePayment {
   invoiceNumber: string;
   refundReason?: string;
   refundedAt?: string;
+  /** Upgrades: the plan's full price, the credit for the unused days of `upgradeFromPaymentId`, and amountInr = price − credit. */
+  listPriceInr?: number;
+  creditInr?: number;
+  upgradeFromPaymentId?: string;
+  /** Early renewal: the new plan starts after the current one ends, plus these free days. */
+  bonusDays?: number;
+  renewalOfPaymentId?: string;
+  /** Refunds: the amount returned (paid − consultations used − processing charges, or as set by the clinic). */
+  refundAmountInr?: number;
 }

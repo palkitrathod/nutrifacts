@@ -5,10 +5,28 @@ import http, { type Server } from 'node:http';
 import { createApp, SESSION_COOKIE } from './app';
 import { DEMO_PASSWORD, openDb, seed, type Db } from './db';
 import { RateLimiter } from './rateLimiter';
+import type { MailMessage, Mailer } from './mailer';
+import fs from 'node:fs';
 
 let db: Db;
 let server: Server;
 let base: string;
+let sent: MailMessage[];
+let mailFails = false;
+
+const testMailer: Mailer = {
+  async send(message) {
+    if (mailFails) throw new Error('SMTP down');
+    sent.push(message);
+  },
+};
+
+/** The code in the latest email sent to this address. */
+function lastCode(email: string): string {
+  const mail = sent.filter((m) => m.to === email.toLowerCase()).at(-1);
+  if (!mail) throw new Error(`No email sent to ${email}`);
+  return mail.text.match(/email address: (\d{6})/)![1];
+}
 
 const validSignUp = {
   name: 'Meera Iyer',
@@ -21,7 +39,9 @@ const validSignUp = {
 async function start(opts: Partial<Parameters<typeof createApp>[0]> = {}) {
   db = openDb(':memory:');
   await seed(db, { demoUsers: true });
-  const app = createApp({ db, secureCookies: false, ...opts });
+  sent = [];
+  mailFails = false;
+  const app = createApp({ db, secureCookies: false, mailer: testMailer, ...opts });
   await new Promise<void>((resolve) => {
     server = app.listen(0, '127.0.0.1', () => resolve());
   });
@@ -50,9 +70,12 @@ describe('POST /api/auth/signup', () => {
   it('creates a patient, normalises the data and signs them in', async () => {
     const res = await post('/auth/signup', validSignUp);
     expect(res.status).toBe(201);
-    const { user } = await res.json();
+    const body = await res.json();
+    const { user } = body;
     expect(user).toMatchObject({ name: 'Meera Iyer', email: 'meera.iyer@example.com', phone: '+919876543210', role: 'patient' });
     expect(user).not.toHaveProperty('password_hash');
+    expect(user.emailVerified).toBe(false);
+    expect(body.codeSent).toBe(true);
 
     const raw = res.headers.getSetCookie().join(';');
     expect(raw).toMatch(/HttpOnly/i);
@@ -98,11 +121,22 @@ describe('POST /api/auth/signup', () => {
     expect((await res.json()).error.fields.acceptedTerms).toBeTruthy();
   });
 
-  it('rejects a duplicate email regardless of case', async () => {
-    await post('/auth/signup', validSignUp);
+  it('rejects a duplicate of a verified email regardless of case', async () => {
+    const first = await post('/auth/signup', validSignUp);
+    await post('/auth/verify-email', { code: lastCode(validSignUp.email) }, { Cookie: sessionCookie(first)! });
     const res = await post('/auth/signup', { ...validSignUp, email: 'MEERA.IYER@EXAMPLE.COM' });
     expect(res.status).toBe(409);
     expect((await res.json()).error.code).toBe('email_taken');
+  });
+
+  it('lets a new sign-up take over an email whose account was never verified', async () => {
+    const first = await post('/auth/signup', validSignUp);
+    const firstId = (await first.json()).user.id;
+    const second = await post('/auth/signup', { ...validSignUp, name: 'Real Meera', password: 'another123' });
+    expect(second.status).toBe(201);
+    expect((await second.json()).user.id).not.toBe(firstId);
+    // The abandoned account and its session are gone.
+    expect((await me(sessionCookie(first))).status).toBe(401);
   });
 
   it('rejects an email already used by a seeded account', async () => {
@@ -392,5 +426,327 @@ describe('deployment safety', () => {
     await start({ strictHeaders: true });
     const res = await fetch(`${base}/api/auth/me`);
     expect(res.headers.get('content-security-policy')).toContain("default-src 'self'");
+  });
+});
+
+describe('email verification', () => {
+  async function signUp(override: Partial<typeof validSignUp> = {}) {
+    const res = await post('/auth/signup', { ...validSignUp, ...override });
+    expect(res.status).toBe(201);
+    return sessionCookie(res)!;
+  }
+  const verify = (cookie: string, code: unknown) => post('/auth/verify-email', { code }, { Cookie: cookie });
+  const resend = (cookie: string) => post('/auth/verify-email/resend', {}, { Cookie: cookie });
+  const data = (cookie: string) => fetch(`${base}/api/data`, { headers: { Cookie: cookie } });
+
+  it('emails a 6-digit code on sign-up, never in the subject or inbox preview', async () => {
+    await signUp();
+    expect(sent).toHaveLength(1);
+    const [mail] = sent;
+    const code = lastCode(validSignUp.email);
+    expect(mail.to).toBe('meera.iyer@example.com');
+    expect(mail.subject).toBe('Verify your email address');
+    expect(mail.html).toContain('Hi Meera,');
+    expect(mail.html).toContain(`>${code}</div>`);
+    expect(mail.text).toContain(code);
+    const preview = mail.html.match(/<div style="display:none[^>]*>([^<]*)</)![1];
+    expect(preview).not.toMatch(/\d{6}/);
+    // Images are attached inline (no "load images" prompt) and exist on disk.
+    expect(mail.attachments?.map((a) => a.cid)).toEqual(['nf-header', 'nf-dietitian']);
+    for (const a of mail.attachments!) {
+      expect(mail.html).toContain(`cid:${a.cid}`);
+      expect(fs.existsSync(a.path)).toBe(true);
+    }
+  });
+
+  it('escapes the name in the email', async () => {
+    await signUp({ name: "D'Souza Meera" });
+    expect(sent[0].html).toContain('Hi D&#39;Souza,');
+    expect(sent[0].text).toContain("Hi D'Souza,");
+  });
+
+  it('keeps app data locked until the email is verified', async () => {
+    const cookie = await signUp();
+    const locked = await data(cookie);
+    expect(locked.status).toBe(403);
+    expect((await locked.json()).error.code).toBe('email_unverified');
+
+    const res = await verify(cookie, lastCode(validSignUp.email));
+    expect(res.status).toBe(200);
+    expect((await res.json()).user.emailVerified).toBe(true);
+    expect((await data(cookie)).status).toBe(200);
+    expect((await (await me(cookie)).json()).user.emailVerified).toBe(true);
+  });
+
+  it('accepts a code typed with spaces', async () => {
+    const cookie = await signUp();
+    const code = lastCode(validSignUp.email);
+    expect((await verify(cookie, `${code.slice(0, 3)} ${code.slice(3)}`)).status).toBe(200);
+  });
+
+  it('rejects a wrong code, counting down the tries, then locks the code', async () => {
+    const cookie = await signUp();
+    const right = lastCode(validSignUp.email);
+    const wrong = right === '000000' ? '111111' : '000000';
+    for (let left = 4; left >= 1; left--) {
+      const res = await verify(cookie, wrong);
+      expect(res.status).toBe(400);
+      const { error } = await res.json();
+      expect(error.code).toBe('invalid_code');
+      expect(error.fields.code).toContain(`${left} ${left === 1 ? 'try' : 'tries'} left`);
+    }
+    expect((await verify(cookie, wrong)).status).toBe(429);
+    // Even the right code no longer works: a new one has to be requested.
+    const locked = await verify(cookie, right);
+    expect(locked.status).toBe(429);
+    expect((await locked.json()).error.code).toBe('too_many_attempts');
+  });
+
+  it('rejects malformed codes without using up a try', async () => {
+    const cookie = await signUp();
+    for (const bad of ['', '12345', '1234567', 'abcdef', null]) {
+      const res = await verify(cookie, bad);
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.code).toBe('validation_failed');
+    }
+    expect((await verify(cookie, lastCode(validSignUp.email))).status).toBe(200);
+  });
+
+  it('rejects an expired code', async () => {
+    const cookie = await signUp();
+    db.prepare('UPDATE email_codes SET expires_at = ?').run(Date.now() - 1);
+    const res = await verify(cookie, lastCode(validSignUp.email));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe('code_expired');
+  });
+
+  it('sends a fresh code on resend, and the old code stops working', async () => {
+    const cookie = await signUp();
+    const first = lastCode(validSignUp.email);
+
+    const tooSoon = await resend(cookie);
+    expect(tooSoon.status).toBe(429);
+    expect((await tooSoon.json()).error.code).toBe('resend_too_soon');
+    expect(Number(tooSoon.headers.get('retry-after'))).toBeGreaterThan(0);
+
+    db.prepare('UPDATE email_codes SET sent_at = sent_at - 61000').run();
+    const res = await resend(cookie);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ sentTo: 'meera.iyer@example.com', resendAfterSec: 60 });
+    expect(sent).toHaveLength(2);
+
+    let second = lastCode(validSignUp.email);
+    // A fresh code is random, so it can (rarely) repeat; resend until it differs to test invalidation.
+    while (second === first) {
+      db.prepare('UPDATE email_codes SET sent_at = sent_at - 61000').run();
+      await resend(cookie);
+      second = lastCode(validSignUp.email);
+    }
+    expect((await verify(cookie, first)).status).toBe(400);
+    expect((await verify(cookie, second)).status).toBe(200);
+  });
+
+  it('limits how many codes an account can request per hour', async () => {
+    server.close();
+    await start({ resendCodeLimiter: new RateLimiter({ max: 2, windowMs: 60_000 }) });
+    const cookie = await signUp();
+    for (let i = 0; i < 2; i++) {
+      db.prepare('UPDATE email_codes SET sent_at = sent_at - 61000').run();
+      expect((await resend(cookie)).status).toBe(200);
+    }
+    db.prepare('UPDATE email_codes SET sent_at = sent_at - 61000').run();
+    const res = await resend(cookie);
+    expect(res.status).toBe(429);
+    expect((await res.json()).error.code).toBe('rate_limited');
+  });
+
+  it('still creates the account when the email fails, and resend can be retried at once', async () => {
+    mailFails = true;
+    const res = await post('/auth/signup', validSignUp);
+    expect(res.status).toBe(201);
+    expect((await res.json()).codeSent).toBe(false);
+    const cookie = sessionCookie(res)!;
+
+    const failed = await resend(cookie);
+    expect(failed.status).toBe(503);
+    expect((await failed.json()).error.code).toBe('email_failed');
+
+    mailFails = false;
+    expect((await resend(cookie)).status).toBe(200);
+    expect((await verify(cookie, lastCode(validSignUp.email))).status).toBe(200);
+  });
+
+  it('signing in to an unverified account sends a new code (unless one was just sent)', async () => {
+    await signUp();
+    const signIn = () => post('/auth/signin', { email: validSignUp.email, password: validSignUp.password });
+
+    const soon = await signIn();
+    expect(soon.status).toBe(200);
+    expect((await soon.json()).user.emailVerified).toBe(false);
+    expect(sent).toHaveLength(1); // the sign-up code is still fresh
+
+    db.prepare('UPDATE email_codes SET sent_at = sent_at - 61000').run();
+    const later = await signIn();
+    expect((await later.json()).codeSent).toBe(true);
+    expect(sent).toHaveLength(2);
+  });
+
+  it('only adds the patient to the clinic list once verified', async () => {
+    const cookie = await signUp();
+    const count = () => (db.prepare("SELECT COUNT(*) AS n FROM records WHERE collection = 'patients'").get() as { n: number }).n;
+    const before = count();
+    await verify(cookie, lastCode(validSignUp.email));
+    expect(count()).toBe(before + 1);
+  });
+
+  it('needs a session, and is a no-op for accounts that are already verified', async () => {
+    expect((await post('/auth/verify-email', { code: '123456' })).status).toBe(401);
+    expect((await post('/auth/verify-email/resend', {})).status).toBe(401);
+
+    const priya = sessionCookie(await post('/auth/signin', { email: 'priya.sharma@example.com', password: DEMO_PASSWORD }))!;
+    expect((await (await me(priya)).json()).user.emailVerified).toBe(true);
+    expect((await verify(priya, '000000')).status).toBe(200);
+    expect((await resend(priya)).status).toBe(409);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('stores only a hash of the code', async () => {
+    await signUp();
+    const row = db.prepare('SELECT code_hash FROM email_codes').get() as { code_hash: string };
+    expect(row.code_hash).not.toContain(lastCode(validSignUp.email));
+    expect(row.code_hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe('database migration', () => {
+  it('treats accounts created before email verification existed as verified', async () => {
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const fs = await import('node:fs');
+    const { DatabaseSync } = await import('node:sqlite');
+    const file = path.join(os.tmpdir(), `nf-migrate-${Date.now()}.db`);
+    const old = new DatabaseSync(file);
+    old.exec(`CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      phone TEXT NOT NULL, role TEXT NOT NULL, password_hash TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT 'x');
+      INSERT INTO users (id, name, email, phone, role, password_hash) VALUES ('patient-old', 'Old', 'old@example.com', '+91', 'patient', 'h');`);
+    old.close();
+    const migrated = openDb(file);
+    const row = migrated.prepare('SELECT email_verified_at FROM users WHERE id = ?').get('patient-old') as { email_verified_at: string | null };
+    expect(row.email_verified_at).toBeTruthy();
+    migrated.close();
+    fs.rmSync(file, { force: true });
+    fs.rmSync(`${file}-wal`, { force: true });
+    fs.rmSync(`${file}-shm`, { force: true });
+  });
+});
+
+describe('my profile: account details', () => {
+  /** A signed-up, verified patient (so their profile record exists). Returns the session cookie. */
+  async function verifiedPatient() {
+    const res = await post('/auth/signup', validSignUp);
+    const cookie = sessionCookie(res)!;
+    expect((await post('/auth/verify-email', { code: lastCode(validSignUp.email) }, { Cookie: cookie })).status).toBe(200);
+    sent = [];
+    return cookie;
+  }
+  const profileRecord = () =>
+    JSON.parse((db.prepare("SELECT data FROM records WHERE collection = 'patients' AND id = (SELECT id FROM users WHERE name LIKE 'Meera%' OR email LIKE '%meera%')").get() as { data: string }).data);
+  const changeEmailCode = (to: string) => {
+    const mail = sent.filter((m) => m.to === to).at(-1)!;
+    return mail.text.match(/email address: (\d{6})/)![1];
+  };
+
+  it('needs a verified session', async () => {
+    expect((await post('/account/profile', { name: 'X', phone: '9876543210' })).status).toBe(401);
+    const unverified = sessionCookie(await post('/auth/signup', { ...validSignUp, email: 'new@example.com' }))!;
+    const res = await post('/account/profile', { name: 'New Name', phone: '9876543210' }, { Cookie: unverified });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error.code).toBe('email_unverified');
+    expect((await post('/account/email', { newEmail: 'x@example.com', currentPassword: 'healthy123' }, { Cookie: unverified })).status).toBe(403);
+  });
+
+  it('updates name and mobile, normalised, on the account and the patient record', async () => {
+    const cookie = await verifiedPatient();
+    const res = await post('/account/profile', { name: '  Meera   Krishnan ', phone: '098765 11111' }, { Cookie: cookie });
+    expect(res.status).toBe(200);
+    expect((await res.json()).user).toMatchObject({ name: 'Meera Krishnan', phone: '+919876511111' });
+    expect((await (await me(cookie)).json()).user.name).toBe('Meera Krishnan');
+    expect(profileRecord()).toMatchObject({ name: 'Meera Krishnan', phone: '+91 98765 11111' });
+  });
+
+  it('rejects an invalid name or mobile', async () => {
+    const cookie = await verifiedPatient();
+    const res = await post('/account/profile', { name: 'R2D2', phone: '123' }, { Cookie: cookie });
+    expect(res.status).toBe(400);
+    const { error } = await res.json();
+    expect(Object.keys(error.fields).sort()).toEqual(['name', 'phone']);
+  });
+
+  it('the profile record cannot change the name or email behind the account’s back', async () => {
+    const cookie = await verifiedPatient();
+    const record = profileRecord();
+    const res = await post('/data/batch', { ops: [{ collection: 'patients', id: record.id, data: { ...record, name: 'Someone Else', email: 'other@example.com', heightCm: 160 } }] }, { Cookie: cookie });
+    expect(res.status).toBe(200);
+    expect(profileRecord()).toMatchObject({ name: 'Meera Iyer', email: 'meera.iyer@example.com', heightCm: 160 });
+  });
+
+  it('changes email only after the password and a code sent to the new address', async () => {
+    const cookie = await verifiedPatient();
+
+    const wrongPassword = await post('/account/email', { newEmail: 'meera.new@example.com', currentPassword: 'nope12345' }, { Cookie: cookie });
+    expect(wrongPassword.status).toBe(400);
+    expect((await wrongPassword.json()).error.fields.currentPassword).toMatch(/incorrect/);
+    expect(sent).toHaveLength(0);
+
+    const ok = await post('/account/email', { newEmail: ' Meera.New@Example.com ', currentPassword: validSignUp.password }, { Cookie: cookie });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ sentTo: 'meera.new@example.com', resendAfterSec: 60 });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ to: 'meera.new@example.com', subject: 'Confirm your new email address' });
+    // Nothing has changed yet.
+    expect((await (await me(cookie)).json()).user.email).toBe('meera.iyer@example.com');
+
+    const code = changeEmailCode('meera.new@example.com');
+    const wrong = code === '000000' ? '111111' : '000000';
+    expect((await post('/account/email/confirm', { code: wrong }, { Cookie: cookie })).status).toBe(400);
+
+    const confirmed = await post('/account/email/confirm', { code }, { Cookie: cookie });
+    expect(confirmed.status).toBe(200);
+    expect((await confirmed.json()).user).toMatchObject({ email: 'meera.new@example.com', emailVerified: true });
+    expect(profileRecord().email).toBe('meera.new@example.com');
+
+    // Sign-in follows the new address.
+    expect((await post('/auth/signin', { email: 'meera.new@example.com', password: validSignUp.password })).status).toBe(200);
+    expect((await post('/auth/signin', { email: 'meera.iyer@example.com', password: validSignUp.password })).status).toBe(401);
+  });
+
+  it('will not move to an address another verified account uses, or to the same address', async () => {
+    const cookie = await verifiedPatient();
+    const taken = await post('/account/email', { newEmail: 'priya.sharma@example.com', currentPassword: validSignUp.password }, { Cookie: cookie });
+    expect(taken.status).toBe(409);
+    expect((await taken.json()).error.fields.newEmail).toMatch(/another account/i);
+
+    const same = await post('/account/email', { newEmail: 'MEERA.IYER@example.com', currentPassword: validSignUp.password }, { Cookie: cookie });
+    expect(same.status).toBe(400);
+    expect((await same.json()).error.fields.newEmail).toMatch(/already your email/);
+  });
+
+  it('a newer request replaces the earlier code (and its address)', async () => {
+    const cookie = await verifiedPatient();
+    await post('/account/email', { newEmail: 'first@example.com', currentPassword: validSignUp.password }, { Cookie: cookie });
+    const firstCode = changeEmailCode('first@example.com');
+    db.prepare("UPDATE email_codes SET sent_at = sent_at - 61000 WHERE purpose = 'email_change'").run();
+    await post('/account/email', { newEmail: 'second@example.com', currentPassword: validSignUp.password }, { Cookie: cookie });
+    const secondCode = changeEmailCode('second@example.com');
+    if (firstCode !== secondCode) expect((await post('/account/email/confirm', { code: firstCode }, { Cookie: cookie })).status).toBe(400);
+    const res = await post('/account/email/confirm', { code: secondCode }, { Cookie: cookie });
+    expect((await res.json()).user.email).toBe('second@example.com');
+  });
+
+  it('confirming without a pending change is refused', async () => {
+    const cookie = await verifiedPatient();
+    const res = await post('/account/email/confirm', { code: '123456' }, { Cookie: cookie });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe('code_expired');
   });
 });

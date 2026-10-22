@@ -16,12 +16,18 @@ import {
   TrendingUp,
   DollarSign,
   Calendar,
+  CalendarPlus,
+  Gift,
+  Wallet,
 } from 'lucide-react';
 import { useNutrition } from '../context/NutritionContext';
 import { NutritionPackage, PackagePayment } from '../types/nutrition';
+import { addDays, canRenewEarly, daysLeft, EARLY_RENEWAL_WINDOW_DAYS, isPlanActive, planChange, RENEWAL_BONUS_DAYS, todayIso, upgradeQuote } from '../shared/plans';
+import { netAmount, REFUND_PROMISE_DAYS, suggestedRefund } from '../shared/pricing';
+import { PlanCard, WinWinStrip, planFamilies, sortPlans } from '../components/PlanCard';
 
 interface PackagesScreenProps {
-  onSelectPackageToBuy: (pkg: NutritionPackage) => void;
+  onSelectPackageToBuy: (pkg: NutritionPackage, options?: { upgrade?: boolean; renew?: boolean }) => void;
   onViewReceipt: (payment: PackagePayment) => void;
 }
 
@@ -34,13 +40,19 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
     isDietitian,
     packages,
     payments,
+    appointments,
     updatePackage,
     addPackage,
     togglePackageActive,
     refundPayment,
     getPatientPayments,
     getActivePackage,
+    schedulePlanChange,
+    cancelScheduledPlanChange,
   } = useNutrition();
+
+  // Patient: a downgrade / switch waiting for confirmation.
+  const [confirmingChange, setConfirmingChange] = useState<NutritionPackage | null>(null);
 
   const [activeTab, setActiveTab] = useState<'packages' | 'history' | 'admin'>('packages');
 
@@ -62,7 +74,21 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
   const [refundingPaymentId, setRefundingPaymentId] = useState<string | null>(null);
   const [refundReason, setRefundReason] = useState('Requested by patient within 7 days');
 
-  const activePlan = getActivePackage(currentUser.id);
+  const activePlan = getActivePackage(currentUser.id); // latest purchase (may have ended)
+  const today = todayIso();
+  const planRunning = isPlanActive(activePlan, today);
+  const scheduled = currentUser.scheduledPlanChange;
+  // The Starter Consultation counts in full (not just its unused days) towards a bigger plan.
+  const currentCreditInFull = planRunning && packages.find((p) => p.id === activePlan.packageId)?.creditInFull === true;
+  const visiblePlans = sortPlans(packages.filter((p) => p.isActive || isDietitian));
+  // Plans offered in several lengths show one card with a 1 / 3 / 6-month choice. It starts on the
+  // patient's current length, otherwise on 3 months (the better deal for most people).
+  const [lengthChoice, setLengthChoice] = useState<Record<string, string>>({});
+  const chosenLength = (family: NutritionPackage[]) =>
+    family.find((p) => p.id === lengthChoice[family[0].id]) ??
+    family.find((p) => !isDietitian && planRunning && p.id === activePlan.packageId) ??
+    family.find((p) => p.bundleOf?.months === 3) ??
+    family[0];
   const myPayments = getPatientPayments(currentUser.id);
 
   // Revenue calculation for Dietitian
@@ -110,32 +136,55 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
     setNewInclusions('');
   };
 
+  // 7-day promise: the suggested refund is what was paid, minus consultations used since the purchase and
+  // the processing charges the payment gateway keeps. The clinic can adjust the amount.
+  const refundingPayment = payments.find((p) => p.id === refundingPaymentId);
+  const refundBreakdown = (() => {
+    if (!refundingPayment) return undefined;
+    const used = appointments.filter(
+      (a) => a.patientId === refundingPayment.patientId && a.status === 'completed' && a.date >= refundingPayment.createdAt
+    );
+    const usedInr = used.reduce((sum, a) => sum + (a.consultationFeeInr || 0), 0);
+    const withinPromise = refundingPayment.createdAt >= addDays(today, -REFUND_PROMISE_DAYS);
+    return { ...suggestedRefund(refundingPayment.amountInr, usedInr), usedCount: used.length, withinPromise };
+  })();
+  const [refundAmount, setRefundAmount] = useState('');
+
+  const startRefund = (paymentId: string) => {
+    setRefundingPaymentId(paymentId);
+    setRefundAmount('');
+  };
+
   const handleProcessRefund = () => {
-    if (!refundingPaymentId) return;
-    refundPayment(refundingPaymentId, refundReason);
+    if (!refundingPaymentId || !refundBreakdown) return;
+    const amount = refundAmount.trim() === '' ? refundBreakdown.refundInr : Math.round(Number(refundAmount));
+    if (!Number.isFinite(amount) || amount < 0 || amount > (refundingPayment?.amountInr ?? 0)) return;
+    refundPayment(refundingPaymentId, refundReason, amount);
     setRefundingPaymentId(null);
   };
 
   return (
-    <div className="flex-1 pb-16 space-y-5 px-4 pt-4 md:px-8 md:pt-6 max-w-5xl mx-auto w-full">
+    <div className="flex-1 pb-16 space-y-5 px-4 pt-4 md:px-8 md:pt-6 max-w-5xl xl:max-w-6xl 2xl:max-w-7xl mx-auto w-full">
       
       {/* Header Banner */}
       <div className="bg-white rounded-2xl md:rounded-3xl border border-slate-200 p-5 md:p-6 shadow-2xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="space-y-1">
             <span className="text-[11px] font-bold uppercase tracking-wider text-[#3E6553]">
-              Nutrifacts Pricing & Packages
+              {isDietitian ? 'Nutrifacts Pricing & Packages' : 'My Plans'}
             </span>
             <h1 className="text-lg sm:text-xl font-serif font-bold text-slate-900">
-              Personalized Nutrition Care Plans
+              {isDietitian ? 'Personalized Nutrition Care Plans' : 'Your Nutrition Care Plan'}
             </h1>
             <p className="text-xs text-slate-500">
-              Transparent, flexible pricing in Indian Rupees (₹) with zero hidden fees
+              {isDietitian
+                ? 'Transparent, flexible pricing in Indian Rupees (₹) with zero hidden fees'
+                : 'Upgrade any time (unused days are credited), or switch to a smaller plan when yours ends.'}
             </p>
           </div>
 
           {/* Tab Selector */}
-          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl text-xs font-medium">
+          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl text-xs font-medium self-start sm:self-auto max-w-full overflow-x-auto">
             <button
               type="button"
               onClick={() => setActiveTab('packages')}
@@ -174,32 +223,64 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
           </div>
         </div>
 
-        {/* Active Plan Strip for Patient */}
-        {!isDietitian && activePlan && (
-          <div className="p-3.5 bg-emerald-50 rounded-xl border border-emerald-200 flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-full bg-emerald-200 text-emerald-900 flex items-center justify-center font-bold">
-                ✓
+        {/* Patient: current plan, and any scheduled change */}
+        {!isDietitian && (
+          <section aria-label="Current plan" className={`p-4 rounded-xl border text-xs space-y-3 ${planRunning ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
+            {activePlan ? (
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold shrink-0 ${planRunning ? 'bg-emerald-200 text-emerald-900' : 'bg-slate-200 text-slate-600'}`}>
+                    {planRunning ? '✓' : <Clock className="w-4 h-4" />}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-900">
+                      {planRunning ? 'Current plan' : 'Plan ended'}: {activePlan.packageTitle}
+                      {planRunning && (
+                        <span className="ml-2 align-middle text-[10px] font-semibold bg-white text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-full whitespace-nowrap">
+                          {daysLeft(activePlan, today)} {daysLeft(activePlan, today) === 1 ? 'day' : 'days'} left
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-[11px] text-slate-600 break-words">
+                      {planRunning ? 'Valid until' : 'Ended on'} <strong>{activePlan.validUntil}</strong> · Ref: {activePlan.transactionRef}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onViewReceipt(activePlan)}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-800 hover:bg-emerald-900 text-white font-medium text-xs flex items-center gap-1 transition-colors"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>View Invoice</span>
+                </button>
               </div>
-              <div>
-                <p className="font-bold text-emerald-950">
-                  Active Package: {activePlan.packageTitle}
-                </p>
-                <p className="text-[11px] text-emerald-800">
-                  Valid until <strong>{activePlan.validUntil}</strong> · Ref: {activePlan.transactionRef}
-                </p>
-              </div>
-            </div>
+            ) : (
+              <p className="text-slate-600">
+                <strong className="text-slate-900">No plan yet.</strong> Choose a plan below to start your nutrition care.
+              </p>
+            )}
 
-            <button
-              type="button"
-              onClick={() => onViewReceipt(activePlan)}
-              className="px-3 py-1.5 rounded-lg bg-emerald-800 hover:bg-emerald-900 text-white font-medium text-xs flex items-center gap-1 transition-colors"
-            >
-              <FileText className="w-3.5 h-3.5" />
-              <span>View Invoice</span>
-            </button>
-          </div>
+            {scheduled && (
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-emerald-200/70">
+                <p className="text-slate-700 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                  {planRunning ? (
+                    <span>
+                      Switching to <strong>{scheduled.packageTitle}</strong> on <strong>{scheduled.effectiveDate}</strong>.
+                    </span>
+                  ) : (
+                    <span>
+                      Your next plan is <strong>{scheduled.packageTitle}</strong>. Activate it below to continue.
+                    </span>
+                  )}
+                </p>
+                <button type="button" onClick={cancelScheduledPlanChange} className="font-semibold text-slate-600 hover:text-red-700 hover:underline">
+                  Cancel change
+                </button>
+              </div>
+            )}
+          </section>
         )}
 
         {/* Revenue KPI Strip for Dietitian */}
@@ -234,114 +315,133 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
       {/* Tab 1: Available Plans */}
       {activeTab === 'packages' && (
         <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {packages
-              .filter((p) => p.isActive || isDietitian)
-              .map((pkg) => {
-                const isCurrent = activePlan?.packageId === pkg.id;
-                return (
-                  <div
-                    key={pkg.id}
-                    className={`rounded-2xl bg-white border p-5 flex flex-col justify-between transition-all relative ${
-                      pkg.isPopular
-                        ? 'border-emerald-500 shadow-md ring-2 ring-emerald-500/20'
-                        : 'border-slate-200 hover:border-emerald-300'
-                    }`}
-                  >
-                    {pkg.isPopular && (
-                      <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-[#3E6553] text-white text-[10px] font-bold uppercase tracking-wider py-0.5 px-3 rounded-full shadow-xs">
-                        Most Recommended
-                      </span>
-                    )}
+          {!isDietitian && <WinWinStrip />}
 
-                    <div className="space-y-3">
-                      <div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider">
-                            {pkg.durationLabel}
-                          </span>
-                          {!pkg.isActive && (
-                            <span className="text-[10px] bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full">
-                              Inactive
-                            </span>
-                          )}
-                        </div>
-                        <h3 className="text-base font-serif font-bold text-slate-900 mt-1">
-                          {pkg.title}
-                        </h3>
-                        <p className="text-xs text-slate-500 mt-0.5">{pkg.tagline}</p>
-                      </div>
+          {!isDietitian && planRunning && currentCreditInFull && (
+            <div role="status" className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-950">
+              <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+                <Gift className="w-4.5 h-4.5" aria-hidden="true" />
+              </div>
+              <p className="leading-relaxed">
+                <strong className="block text-sm">You have ₹{activePlan.amountInr.toLocaleString('en-IN')} credit</strong>
+                Your {activePlan.packageTitle} counts in full towards any bigger plan until <strong>{activePlan.validUntil}</strong>.
+              </p>
+            </div>
+          )}
 
-                      {/* Price Tag */}
-                      <div className="py-2 border-y border-slate-100 flex items-baseline gap-1">
-                        <span className="text-3xl font-extrabold font-mono text-slate-900">
-                          ₹{pkg.priceInr}
-                        </span>
-                        <span className="text-xs text-slate-500">/ INR</span>
-                      </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 pt-3">
+            {planFamilies(visiblePlans).map((family) => {
+              const pkg = chosenLength(family);
+              const change = planChange(activePlan, pkg, today);
+              const isScheduled = scheduled?.packageId === pkg.id;
+              const quote = upgradeQuote(activePlan, pkg.priceInr, today, { inFull: currentCreditInFull });
+              // Early renewal is for ongoing care; one-time plans are simply bought again.
+              const renewable = canRenewEarly(activePlan, today) && pkg.category === 'monthly_care';
+              const primary = 'w-full py-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 shadow-xs transition-all bg-[#3E6553] hover:bg-[#2D4C3C] text-white';
+              const secondary = 'w-full py-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 transition-all bg-white hover:bg-slate-50 text-slate-800 border border-slate-300';
+              const status = 'w-full py-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 text-center px-2';
 
-                      {/* Inclusions */}
-                      <div className="space-y-2 text-xs">
-                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
-                          What&apos;s Included:
-                        </span>
-                        <ul className="space-y-1.5 text-slate-600">
-                          {pkg.inclusions.map((inc, i) => (
-                            <li key={i} className="flex items-start gap-2">
-                              <Check className="w-3.5 h-3.5 text-emerald-700 shrink-0 mt-0.5" />
-                              <span className="leading-snug">{inc}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
+              let footer: React.ReactNode;
+              let priceNote: React.ReactNode;
+              if (isDietitian) {
+                footer = (
+                  <>
+                    <p className="flex items-center justify-between gap-2 text-[11px] text-slate-600 bg-slate-50 rounded-lg px-3 py-2">
+                      <span className="flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5 text-[#3E6553]" aria-hidden="true" /> You receive</span>
+                      <strong className="text-slate-900">₹{netAmount(pkg.priceInr).toLocaleString('en-IN')}</strong>
+                    </p>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => handleStartEdit(pkg)} className="flex-1 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium text-xs flex items-center justify-center gap-1">
+                        <Edit2 className="w-3.5 h-3.5" aria-hidden="true" /> <span>Edit Price</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => togglePackageActive(pkg.id)}
+                        className={`px-3 py-2 rounded-xl text-xs font-medium transition-colors ${pkg.isActive ? 'bg-amber-100 text-amber-900 hover:bg-amber-200' : 'bg-emerald-100 text-emerald-900 hover:bg-emerald-200'}`}
+                      >
+                        {pkg.isActive ? 'Deactivate' : 'Activate'}
+                      </button>
                     </div>
-
-                    {/* Actions */}
-                    <div className="pt-4 mt-4 border-t border-slate-100 space-y-2">
-                      <p className="text-[10px] text-slate-400 italic leading-tight">
-                        {pkg.terms}
-                      </p>
-
-                      {isDietitian ? (
-                        <div className="flex gap-2 pt-1">
-                          <button
-                            type="button"
-                            onClick={() => handleStartEdit(pkg)}
-                            className="flex-1 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium text-xs flex items-center justify-center gap-1"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                            <span>Edit Price</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => togglePackageActive(pkg.id)}
-                            className={`px-3 py-2 rounded-xl text-xs font-medium transition-colors ${
-                              pkg.isActive
-                                ? 'bg-amber-100 text-amber-900 hover:bg-amber-200'
-                                : 'bg-emerald-100 text-emerald-900 hover:bg-emerald-200'
-                            }`}
-                          >
-                            {pkg.isActive ? 'Deactivate' : 'Activate'}
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => onSelectPackageToBuy(pkg)}
-                          className={`w-full py-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 shadow-xs transition-all ${
-                            pkg.isPopular
-                              ? 'bg-[#3E6553] hover:bg-[#325243] text-white'
-                              : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200'
-                          }`}
-                        >
-                          <CreditCard className="w-4 h-4" />
-                          <span>{isCurrent ? 'Renew Plan (₹' + pkg.priceInr + ')' : 'Select & Pay Online'}</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                    {!pkg.isActive && <p className="text-[11px] text-slate-500 text-center">Inactive · hidden from patients</p>}
+                  </>
                 );
-              })}
+              } else if (change === 'current') {
+                footer = renewable ? (
+                  <>
+                    <button type="button" onClick={() => onSelectPackageToBuy(pkg, { renew: true })} className={primary}>
+                      <CalendarPlus className="w-4 h-4" aria-hidden="true" />
+                      <span>Renew early · get {RENEWAL_BONUS_DAYS} days free</span>
+                    </button>
+                    <p className="text-[11px] text-center text-emerald-800">Starts after {activePlan!.validUntil}, nothing is lost</p>
+                  </>
+                ) : (
+                  <>
+                    <div className={`${status} bg-emerald-100 text-emerald-900 border border-emerald-200`}>
+                      <CheckCircle2 className="w-4 h-4" aria-hidden="true" /> Your current plan
+                    </div>
+                    {pkg.category === 'monthly_care' && (
+                      <p className="text-[11px] text-center text-slate-500">
+                        Early renewal (+{RENEWAL_BONUS_DAYS} days free) opens on {addDays(activePlan!.validUntil, 1 - EARLY_RENEWAL_WINDOW_DAYS)}
+                      </p>
+                    )}
+                  </>
+                );
+              } else if (change === 'upgrade') {
+                if (quote.creditInr > 0) {
+                  priceNote = (
+                    <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-800">
+                      <Gift className="w-3.5 h-3.5" aria-hidden="true" />
+                      Pay ₹{quote.amountDueInr.toLocaleString('en-IN')} today after ₹{quote.creditInr.toLocaleString('en-IN')} credit
+                    </span>
+                  );
+                }
+                footer = (
+                  <button type="button" onClick={() => onSelectPackageToBuy(pkg, { upgrade: true })} className={primary}>
+                    <TrendingUp className="w-4 h-4" aria-hidden="true" />
+                    <span>Upgrade · pay ₹{quote.amountDueInr.toLocaleString('en-IN')}</span>
+                  </button>
+                );
+              } else if (change === 'downgrade' || change === 'switch') {
+                footer = isScheduled ? (
+                  renewable ? (
+                    <button type="button" onClick={() => onSelectPackageToBuy(pkg, { renew: true })} className={primary}>
+                      <CalendarPlus className="w-4 h-4" aria-hidden="true" />
+                      <span>Confirm now · get {RENEWAL_BONUS_DAYS} days free</span>
+                    </button>
+                  ) : (
+                    <div className={`${status} bg-slate-100 text-slate-700 border border-slate-200`}>
+                      <Calendar className="w-4 h-4 shrink-0" aria-hidden="true" /> Starts {scheduled!.effectiveDate}
+                    </div>
+                  )
+                ) : (
+                  <button type="button" onClick={() => setConfirmingChange(pkg)} className={secondary}>
+                    <RotateCcw className="w-4 h-4" aria-hidden="true" />
+                    <span>{change === 'downgrade' ? 'Switch to this when my plan ends' : 'Switch when my plan ends'}</span>
+                  </button>
+                );
+              } else {
+                footer = (
+                  <button type="button" onClick={() => onSelectPackageToBuy(pkg)} className={pkg.isPopular || pkg.isBestValue || isScheduled ? primary : secondary}>
+                    <CreditCard className="w-4 h-4" aria-hidden="true" />
+                    <span>{isScheduled ? 'Start your next plan' : activePlan?.packageId === pkg.id ? 'Renew this plan' : 'Choose this plan'}</span>
+                  </button>
+                );
+              }
+
+              return (
+                <PlanCard
+                  key={family[0].id}
+                  pkg={pkg}
+                  all={visiblePlans}
+                  family={family}
+                  onSelectLength={(p) => setLengthChoice((c) => ({ ...c, [family[0].id]: p.id }))}
+                  footer={footer}
+                  priceNote={priceNote}
+                  showTerms
+                  className={!pkg.isActive ? 'opacity-70' : ''}
+                />
+              );
+            })}
           </div>
 
           {/* Payment Guarantee Notice */}
@@ -355,6 +455,42 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
             <span className="text-[11px] text-slate-400 font-medium shrink-0">
               No automatic debits without consent
             </span>
+          </div>
+        </div>
+      )}
+
+      {confirmingChange && activePlan && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs" onClick={() => setConfirmingChange(null)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="plan-change-title"
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 p-5 space-y-4 text-sm"
+          >
+            <h3 id="plan-change-title" className="font-bold text-slate-900 text-base">
+              Switch to {confirmingChange.title}?
+            </h3>
+            <p className="text-slate-600 text-xs leading-relaxed">
+              You keep everything in <strong>{activePlan.packageTitle}</strong> until <strong>{activePlan.validUntil}</strong>. From{' '}
+              <strong>{addDays(activePlan.validUntil, 1)}</strong> your plan becomes <strong>{confirmingChange.title}</strong> (₹{confirmingChange.priceInr}),
+              which you activate with a payment then. Nothing is charged now, and you can cancel this any time before.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setConfirmingChange(null)} className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-medium">
+                Keep my plan
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  schedulePlanChange(confirmingChange);
+                  setConfirmingChange(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-[#3E6553] hover:bg-[#2D4C3C] text-white text-xs font-semibold"
+              >
+                Confirm change
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -422,7 +558,7 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
 
                     {pay.status === 'refunded' && pay.refundReason && (
                       <p className="text-[11px] text-rose-700 italic">
-                        Refunded: {pay.refundReason}
+                        Refunded{pay.refundAmountInr != null ? ` ₹${pay.refundAmountInr}` : ''}: {pay.refundReason}
                       </p>
                     )}
                   </div>
@@ -440,7 +576,7 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
                     {isDietitian && pay.status === 'successful' && (
                       <button
                         type="button"
-                        onClick={() => setRefundingPaymentId(pay.id)}
+                        onClick={() => startRefund(pay.id)}
                         className="px-2.5 py-1.5 rounded-lg border border-rose-200 text-rose-700 hover:bg-rose-50 text-xs font-medium"
                       >
                         Issue Refund
@@ -615,21 +751,68 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
       )}
 
       {/* Refund Confirmation Modal */}
-      {refundingPaymentId && (
+      {refundingPaymentId && refundingPayment && refundBreakdown && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col p-5 space-y-4 text-xs">
-            <h3 className="font-bold text-sm text-slate-900 text-rose-900">
+          <div role="dialog" aria-modal="true" aria-labelledby="refund-title" className="bg-white w-full max-w-md max-h-[92dvh] overflow-y-auto rounded-2xl shadow-2xl border border-slate-200 flex flex-col p-5 space-y-4 text-xs">
+            <h3 id="refund-title" className="font-bold text-sm text-rose-900">
               Confirm Patient Refund
             </h3>
             <p className="text-slate-600">
-              This will mark the payment as refunded, revoke active package validity, and generate a refund notification.
+              {refundingPayment.patientName} · {refundingPayment.packageTitle} · paid {refundingPayment.createdAt}. The plan ends now and the
+              patient is notified.
             </p>
 
+            <div className={`flex items-start gap-2 rounded-lg px-3 py-2 ${refundBreakdown.withinPromise ? 'bg-emerald-50 text-emerald-900' : 'bg-amber-50 text-amber-900'}`}>
+              <ShieldCheck className="w-4 h-4 shrink-0 mt-px" aria-hidden="true" />
+              <span>
+                {refundBreakdown.withinPromise
+                  ? `Within the ${REFUND_PROMISE_DAYS}-day promise.`
+                  : `Outside the ${REFUND_PROMISE_DAYS}-day promise: any refund is at the clinic's discretion.`}
+              </span>
+            </div>
+
+            <dl className="space-y-1.5 rounded-lg border border-slate-200 p-3">
+              <div className="flex justify-between gap-2">
+                <dt className="text-slate-600">Paid</dt>
+                <dd className="font-mono">₹{refundingPayment.amountInr}</dd>
+              </div>
+              <div className="flex justify-between gap-2">
+                <dt className="text-slate-600">Consultations used ({refundBreakdown.usedCount})</dt>
+                <dd className="font-mono">− ₹{refundBreakdown.consultationsUsedInr}</dd>
+              </div>
+              <div className="flex justify-between gap-2">
+                <dt className="text-slate-600">Payment processing charges (kept by the gateway)</dt>
+                <dd className="font-mono">− ₹{refundBreakdown.processingInr}</dd>
+              </div>
+              <div className="flex justify-between gap-2 pt-1.5 border-t border-slate-100 font-bold text-slate-900">
+                <dt>Suggested refund</dt>
+                <dd className="font-mono">₹{refundBreakdown.refundInr}</dd>
+              </div>
+            </dl>
+
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">
+              <label htmlFor="refund-amount" className="block font-semibold text-slate-700 mb-1">
+                Refund amount (₹)
+              </label>
+              <input
+                id="refund-amount"
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={refundingPayment.amountInr}
+                placeholder={String(refundBreakdown.refundInr)}
+                value={refundAmount}
+                onChange={(e) => setRefundAmount(e.target.value)}
+                className="w-full p-2 rounded-lg border border-slate-300"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="refund-reason" className="block font-semibold text-slate-700 mb-1">
                 Refund Reason / Notes
               </label>
               <input
+                id="refund-reason"
                 type="text"
                 value={refundReason}
                 onChange={(e) => setRefundReason(e.target.value)}

@@ -1,6 +1,7 @@
 import React from 'react';
-import { Bell, UserCheck, Stethoscope, Sparkles } from 'lucide-react';
+import { Bell } from 'lucide-react';
 import { useNutrition } from '../context/NutritionContext';
+import { appNavItems } from './appNav';
 
 interface TopAppBarProps {
   onOpenNotifications: () => void;
@@ -15,108 +16,61 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
   activeTab,
   onNavigateTab,
 }) => {
-  const { currentUser, isDietitian, notifications, viewMode } = useNutrition();
+  const { currentUser, isDietitian, notifications } = useNutrition();
 
   const unreadCount = notifications.filter(
     (n) => n.userId === currentUser.id && !n.read
   ).length;
 
   return (
-    <header className="sticky top-0 z-30 bg-[#3E6553] text-white shadow-sm border-b border-emerald-900/20">
-      <div className="px-4 py-3 flex items-center justify-between gap-4">
+    <header className="sticky top-0 z-30 bg-[#3E6553] text-white shadow-sm border-b border-emerald-900/20 no-print">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 flex items-center justify-between gap-4">
         {/* Brand Zone */}
-        <div className="flex items-center gap-2.5 min-w-0">
-          <button
-            type="button"
-            onClick={() => onNavigateTab('home')}
-            className="flex items-center gap-2 text-left focus:outline-hidden group"
-          >
-            <div className="w-9 h-9 rounded-full bg-white/15 flex items-center justify-center shrink-0 border border-white/20">
-              <span className="text-lg">🥗</span>
+        <button
+          type="button"
+          onClick={() => onNavigateTab('home')}
+          className="flex items-center gap-2 text-left focus:outline-hidden min-w-0"
+        >
+          <div className="w-9 h-9 rounded-full bg-white/15 flex items-center justify-center shrink-0 border border-white/20">
+            <span className="text-lg" aria-hidden="true">🥗</span>
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className="font-bold tracking-tight text-base text-white whitespace-nowrap font-serif">Nutrifacts</span>
+              <span className="text-emerald-200 text-xs font-normal whitespace-nowrap hidden min-[380px]:inline">· dt.Anchal</span>
             </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="font-bold tracking-tight text-base text-white whitespace-nowrap truncate font-serif">
-                  Nutrifacts
-                </span>
-                <span className="text-emerald-200 text-xs font-normal whitespace-nowrap">
-                  · dt.Anchal
-                </span>
-              </div>
-              <p className="text-[11px] text-emerald-100/80 truncate font-light tracking-wide">
-                Nourish Better. Live Healthier.
-              </p>
-            </div>
-          </button>
-        </div>
+            <p className="text-[11px] text-emerald-100/80 truncate font-light tracking-wide hidden sm:block lg:hidden xl:block">
+              Nourish Better. Live Healthier.
+            </p>
+          </div>
+        </button>
 
-        {/* Desktop Nav Links (Visible in Responsive View) */}
-        {viewMode === 'responsive' && (
-          <nav className="hidden lg:flex items-center gap-6 text-sm font-medium text-emerald-100">
-            <button
-              type="button"
-              onClick={() => onNavigateTab('home')}
-              className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
-                activeTab === 'home' ? 'text-white border-b-2 border-emerald-300 font-semibold' : ''
-              }`}
-            >
-              Home
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigateTab('diet')}
-              className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
-                activeTab === 'diet' ? 'text-white border-b-2 border-emerald-300 font-semibold' : ''
-              }`}
-            >
-              {isDietitian ? 'Diet Plans' : 'My Diet Chart'}
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigateTab('progress')}
-              className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
-                activeTab === 'progress' ? 'text-white border-b-2 border-emerald-300 font-semibold' : ''
-              }`}
-            >
-              Progress & Logs
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigateTab('plans')}
-              className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
-                activeTab === 'plans' ? 'text-white border-b-2 border-emerald-300 font-semibold' : ''
-              }`}
-            >
-              Plans & Pricing
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigateTab('appointments')}
-              className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
-                activeTab === 'appointments' ? 'text-white border-b-2 border-emerald-300 font-semibold' : ''
-              }`}
-            >
-              Appointments
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigateTab('profile')}
-              className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
-                activeTab === 'profile' ? 'text-white border-b-2 border-emerald-300 font-semibold' : ''
-              }`}
-            >
-              {isDietitian ? 'Dietitian Admin' : 'My Profile'}
-            </button>
-          </nav>
-        )}
+        {/* Section links on wide screens (phones and tablets use the bottom tab bar) */}
+        <nav aria-label="Main" className="hidden lg:flex items-center gap-1 xl:gap-2 text-sm font-medium text-emerald-100">
+          {appNavItems(isDietitian).map((item) => {
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onNavigateTab(item.id)}
+                aria-current={isActive ? 'page' : undefined}
+                className={`px-3 py-2 rounded-lg whitespace-nowrap transition-colors ${
+                  isActive ? 'bg-white/15 text-white font-semibold' : 'hover:text-white hover:bg-white/10'
+                }`}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
 
-        {/* Right Actions: Notifications & Switch Account */}
-        <div className="flex items-center gap-2 shrink-0">
-          {/* Notifications Button */}
+        {/* Right Actions: Notifications & Account */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           <button
             type="button"
             onClick={onOpenNotifications}
-            className="w-10 h-10 rounded-full hover:bg-white/10 active:bg-white/20 flex items-center justify-center transition-colors relative min-w-[44px] min-h-[44px]"
+            className="w-11 h-11 rounded-full hover:bg-white/10 active:bg-white/20 flex items-center justify-center transition-colors relative"
             title="Notifications"
             aria-label="View notifications"
           >
@@ -128,32 +82,22 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
             )}
           </button>
 
-          {/* Profile / Role Avatar Button */}
           <button
             type="button"
             onClick={onOpenAccount}
-            className="flex items-center gap-2 pl-2 pr-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 transition-all min-h-[44px]"
+            className="flex items-center gap-2 p-1.5 sm:pr-3 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 transition-all min-h-[44px]"
             title={`Logged in as ${currentUser.name}`}
           >
-            <div className="w-7 h-7 rounded-full overflow-hidden bg-emerald-800 shrink-0 border border-white/40 flex items-center justify-center text-xs font-semibold">
+            <div className="w-8 h-8 rounded-full overflow-hidden bg-emerald-800 shrink-0 border border-white/40 flex items-center justify-center text-xs font-semibold">
               {currentUser.avatar ? (
-                <img
-                  src={currentUser.avatar}
-                  alt={currentUser.name}
-                  referrerPolicy="no-referrer"
-                  className="w-full h-full object-cover"
-                />
+                <img src={currentUser.avatar} alt="" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
               ) : (
-                <span>{currentUser.name.charAt(0)}</span>
+                <span>{currentUser.name.charAt(0).toUpperCase()}</span>
               )}
             </div>
-            <div className="text-left hidden sm:block max-w-[100px] truncate">
-              <p className="text-xs font-medium text-white truncate leading-tight">
-                {currentUser.name.split(' ')[0]}
-              </p>
-              <p className="text-[10px] text-emerald-200 uppercase tracking-wider font-semibold">
-                {isDietitian ? 'Dietitian' : 'Patient'}
-              </p>
+            <div className="text-left hidden sm:block max-w-[110px]">
+              <p className="text-xs font-medium text-white truncate leading-tight">{currentUser.name.split(' ')[0]}</p>
+              <p className="text-[10px] text-emerald-200 uppercase tracking-wider font-semibold">{isDietitian ? 'Dietitian' : 'Patient'}</p>
             </div>
           </button>
         </div>

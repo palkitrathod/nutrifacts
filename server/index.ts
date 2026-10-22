@@ -6,6 +6,7 @@ import { createApp } from './app';
 import { openDb, seed } from './db';
 import { seedData } from './data';
 import { RateLimiter } from './rateLimiter';
+import { mailerFromEnv } from './mailer';
 
 const isProd = process.env.NODE_ENV === 'production';
 // Production secrets (admin login) live in .env.production so development keeps its sample accounts.
@@ -32,9 +33,19 @@ const trustProxy = process.env.TRUST_PROXY
   ? /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY
   : undefined;
 const publicOrigins = process.env.PUBLIC_ORIGIN?.split(',').map((o) => o.trim().replace(/\/$/, '')).filter(Boolean);
+// Verification emails go through SMTP when configured; otherwise they're saved to an outbox folder.
+const outboxDir = process.env.MAIL_OUTBOX_DIR ?? path.resolve('data', 'outbox');
+const { mailer, kind: mailKind } = mailerFromEnv(process.env, outboxDir);
+if (mailKind === 'outbox') {
+  const why = process.env.SMTP_HOST ? 'MAIL_TRANSPORT=outbox is set' : 'no SMTP_HOST set';
+  const note = `Email: ${why}, so verification emails are saved to ${outboxDir} instead of being sent.`;
+  if (isProd) console.warn(`WARNING: ${note} New patients will not receive their codes. Set SMTP_* (see .env.example).`);
+  else console.log(note);
+}
 
 const app = createApp({
   db,
+  mailer,
   trustProxy,
   publicOrigins,
   strictHeaders: isProd,

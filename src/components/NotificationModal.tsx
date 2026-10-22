@@ -1,6 +1,7 @@
 import React from 'react';
 import { X, Bell, Calendar, Droplets, Utensils, CheckCheck, TrendingUp, Heart } from 'lucide-react';
 import { useNutrition } from '../context/NutritionContext';
+import { useEscapeToClose } from './useEscapeToClose';
 
 interface NotificationModalProps {
   isOpen: boolean;
@@ -14,6 +15,8 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
   onNavigateTab,
 }) => {
   const { notifications, currentUser, markNotificationRead } = useNutrition();
+
+  useEscapeToClose(isOpen, onClose);
 
   if (!isOpen) return null;
 
@@ -64,6 +67,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close"
             className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/80 hover:text-white"
           >
             <X className="w-5 h-5" />

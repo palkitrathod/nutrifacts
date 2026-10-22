@@ -42,7 +42,9 @@ function mockApi(handlers: Record<string, Handler>) {
 }
 
 const anonymous: Handler = () => ({ status: 401, body: { error: { code: 'unauthenticated', message: 'You are not signed in.' } } });
-const priya = { id: 'patient-priya', name: 'Priya Sharma', email: 'priya.sharma@example.com', phone: '+919876543210', role: 'patient', createdAt: '' };
+const priya = { id: 'patient-priya', name: 'Priya Sharma', email: 'priya.sharma@example.com', phone: '+919876543210', role: 'patient', createdAt: '', emailVerified: true };
+/** Signed up but hasn't entered the emailed code yet. */
+const unverified = { ...priya, id: 'patient-pending', emailVerified: false };
 
 function LocationProbe() {
   const loc = useLocation();
@@ -95,6 +97,13 @@ describe('home page', () => {
     expect((await screen.findAllByRole('link', { name: /open my dashboard/i }))[0]).toHaveAttribute('href', '/app');
     expect(screen.queryByRole('link', { name: 'Sign In' })).not.toBeInTheDocument();
   });
+
+  it('offers no dashboard to someone who signed up but has not verified their email', async () => {
+    mockApi({ 'GET /auth/me': () => ({ status: 200, body: { user: unverified } }) });
+    renderAt('/');
+    expect((await screen.findAllByRole('link', { name: 'Sign In' }))[0]).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /open my dashboard/i })).not.toBeInTheDocument();
+  });
 });
 
 describe('route guards', () => {
@@ -108,6 +117,20 @@ describe('route guards', () => {
     mockApi({ 'GET /auth/me': () => ({ status: 200, body: { user: priya } }) });
     renderAt('/signin');
     await waitFor(() => expect(location()).toBe('/app'));
+  });
+
+  it('lets an unverified account use the sign-in and sign-up pages', async () => {
+    mockApi({ 'GET /auth/me': () => ({ status: 200, body: { user: unverified } }) });
+    renderAt('/signup');
+    expect(await screen.findByRole('heading', { name: 'Create your account' })).toBeInTheDocument();
+    expect(location()).toBe('/signup');
+  });
+
+  it('sends an unverified account from the app to the code screen', async () => {
+    mockApi({ 'GET /auth/me': () => ({ status: 200, body: { user: unverified } }) });
+    renderAt('/app');
+    await waitFor(() => expect(location()).toBe('/verify-email?next=%2Fapp'));
+    expect(await screen.findByRole('heading', { name: 'Check your email' })).toBeInTheDocument();
   });
 
   it('shows a 404 page for unknown URLs', async () => {

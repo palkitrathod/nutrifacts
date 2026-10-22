@@ -9,6 +9,12 @@ interface AuthContextValue {
   user: AuthUser | null;
   signIn: typeof authApi.signIn;
   signUp: typeof authApi.signUp;
+  /** Confirms the emailed code; on success the user becomes verified. */
+  verifyEmail: typeof authApi.verifyEmail;
+  /** My profile: saves name / mobile on the account. */
+  updateAccount: typeof authApi.updateAccount;
+  /** My profile: finishes an email change with the code sent to the new address. */
+  confirmEmailChange: typeof authApi.confirmEmailChange;
   /** Throws if the server could not be reached — the person then stays signed in (and is told). */
   signOut: () => Promise<void>;
   /** Re-runs the session check (e.g. "Try again" after 'unreachable'). */
@@ -122,6 +128,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return u;
   }, []);
 
+  const verifyEmail = useCallback<AuthContextValue['verifyEmail']>(async (code) => {
+    const u = await authApi.verifyEmail(code);
+    setUser(u);
+    return u;
+  }, []);
+
+  const updateAccount = useCallback<AuthContextValue['updateAccount']>(async (body) => {
+    const u = await authApi.updateAccount(body);
+    setUser(u);
+    return u;
+  }, []);
+
+  const confirmEmailChange = useCallback<AuthContextValue['confirmEmailChange']>(async (code) => {
+    const u = await authApi.confirmEmailChange(code);
+    setUser(u);
+    return u;
+  }, []);
+
   const signOut = useCallback(async () => {
     changeCount.current++;
     try {
@@ -138,8 +162,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const value = useMemo(
-    () => ({ status, user, signIn, signUp, signOut, retry }),
-    [status, user, signIn, signUp, signOut, retry]
+    () => ({ status, user, signIn, signUp, verifyEmail, updateAccount, confirmEmailChange, signOut, retry }),
+    [status, user, signIn, signUp, verifyEmail, updateAccount, confirmEmailChange, signOut, retry]
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { MessageCircle, ExternalLink, X, Send, Copy, Check } from 'lucide-react';
+import { useEscapeToClose } from './useEscapeToClose';
 import { useNutrition } from '../context/NutritionContext';
 
 interface WhatsAppButtonProps {
@@ -126,9 +127,10 @@ const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
   onCopy,
   copied,
 }) => {
+  useEscapeToClose(true, onClose);
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
-      <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-2xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-200">
+      <div className="bg-white w-full max-w-md max-h-[92dvh] overflow-y-auto rounded-t-3xl sm:rounded-2xl shadow-2xl border border-slate-200 animate-in fade-in slide-in-from-bottom-4 duration-200">
         <div className="bg-[#128C7E] text-white px-5 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
@@ -142,6 +144,7 @@ const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close"
             className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/80 hover:text-white"
           >
             <X className="w-5 h-5" />

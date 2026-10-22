@@ -34,3 +34,18 @@
   font-display: block;
   src: url('/fonts/playfair-display-latin-wght-italic.woff2') format('woff2');
 }
+
+/*
+ * Big monitors (24"+): scale the whole site up a little, so text, buttons and cards aren't
+ * laptop-sized islands in a sea of empty space. Everything is sized in rem, so it all grows
+ * together. (Breakpoints are unaffected: rem in media queries always means the browser default.)
+ */
+@media (min-width: 1700px) {
+  html { font-size: 106.25%; }
+}
+@media (min-width: 1900px) {
+  html { font-size: 112.5%; }
+}
+@media (min-width: 2400px) {
+  html { font-size: 125%; }
+}

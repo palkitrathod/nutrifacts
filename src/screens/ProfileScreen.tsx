@@ -3,7 +3,6 @@ import {
   User,
   Shield,
   Edit2,
-  Save,
   CheckCircle,
   FileText,
   TrendingUp,
@@ -36,8 +35,10 @@ import {
 } from 'lucide-react';
 import { useNutrition } from '../context/NutritionContext';
 import { ResetPatientPasswordDialog } from '../components/ResetPatientPasswordDialog';
+import { EditProfileForm } from '../components/EditProfileForm';
+import { ProfilePhoto } from '../components/ProfilePhoto';
+import { ageOn } from '../shared/authValidation';
 import {
-  DietaryPreference,
   PackagePayment,
   ClinicalConditionType,
   ClinicalConditionInfo,
@@ -50,6 +51,8 @@ interface ProfileScreenProps {
   onNavigateTab: (tab: string) => void;
   onOpenPdfModal: () => void;
   onViewReceipt?: (payment: PackagePayment) => void;
+  /** Open with the "Edit profile" form showing (from "My profile" in the account panel). */
+  startEditing?: boolean;
 }
 
 type AdminTab =
@@ -64,6 +67,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onNavigateTab,
   onOpenPdfModal,
   onViewReceipt,
+  startEditing = false,
 }) => {
   const {
     currentUser,
@@ -102,39 +106,15 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   );
   const [reminderSentNotice, setReminderSentNotice] = useState<string | null>(null);
 
-  // Edit patient profile state (for patient view)
-  const [isEditingProfile, setIsEditingProfile] = useState(false);
-  // Empty when unknown — never pre-fill invented numbers into a clinical record.
-  const [editAge, setEditAge] = useState(currentUser.age?.toString() ?? '');
-  const [editHeight, setEditHeight] = useState(currentUser.heightCm?.toString() ?? '');
-  const [editCurrentWeight, setEditCurrentWeight] = useState(currentUser.currentWeightKg?.toString() ?? '');
-  const [editTargetWeight, setEditTargetWeight] = useState(currentUser.targetWeightKg?.toString() ?? '');
-  const [editPreference, setEditPreference] = useState<DietaryPreference>(
-    currentUser.dietaryPreference || 'Vegetarian'
-  );
-  const [editWaterGoal, setEditWaterGoal] = useState(
-    currentUser.waterGoalLitres?.toString() || '3.0'
-  );
-  const [editConditions, setEditConditions] = useState(
-    currentUser.medicalConditions?.join(', ') || ''
-  );
-  const [editAllergies, setEditAllergies] = useState(
-    currentUser.allergies?.join(', ') || ''
-  );
-
-  const handleSaveProfile = (e: React.FormEvent) => {
-    e.preventDefault();
-    updatePatientProfile({
-      age: parseInt(editAge) || currentUser.age,
-      heightCm: parseFloat(editHeight) || currentUser.heightCm,
-      currentWeightKg: parseFloat(editCurrentWeight) || currentUser.currentWeightKg,
-      targetWeightKg: parseFloat(editTargetWeight) || currentUser.targetWeightKg,
-      dietaryPreference: editPreference,
-      waterGoalLitres: parseFloat(editWaterGoal) || 3.0,
-      medicalConditions: editConditions.split(',').map((s) => s.trim()).filter(Boolean),
-      allergies: editAllergies.split(',').map((s) => s.trim()).filter(Boolean),
-    });
+  // My profile (patient view)
+  const [isEditingProfile, setIsEditingProfile] = useState(startEditing);
+  const [profileSavedNotice, setProfileSavedNotice] = useState<string | null>(null);
+  const finishEditing = (message?: string) => {
     setIsEditingProfile(false);
+    if (message) {
+      setProfileSavedNotice(message);
+      setTimeout(() => setProfileSavedNotice(null), 4000);
+    }
   };
 
   const handleExecuteClinicalAssignment = () => {
@@ -198,7 +178,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       firstConsultations.length * 500 + followUpConsultations.length * 300;
 
     return (
-      <div className="flex-1 pb-16 space-y-5 px-4 pt-4 md:px-8 md:pt-6 max-w-5xl mx-auto w-full">
+      <div className="flex-1 pb-16 space-y-5 px-4 pt-4 md:px-8 md:pt-6 max-w-5xl xl:max-w-6xl 2xl:max-w-7xl mx-auto w-full">
         {/* Dietitian Profile Banner */}
         <div className="bg-white rounded-2xl md:rounded-3xl border border-slate-200 p-5 md:p-6 shadow-2xs space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -1121,20 +1101,21 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
   // If Patient: Render the Patient Health Profile & Customization Screen
   return (
-    <div className="flex-1 pb-16 space-y-5 px-4 pt-4 md:px-8 md:pt-6 max-w-5xl mx-auto w-full">
+    <div className="flex-1 pb-16 space-y-5 px-4 pt-4 md:px-8 md:pt-6 max-w-5xl xl:max-w-6xl 2xl:max-w-7xl mx-auto w-full">
       
       {/* Profile Header Card */}
       <div className="bg-white rounded-2xl md:rounded-3xl border border-slate-200 p-5 md:p-6 shadow-2xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-full overflow-hidden bg-emerald-100 border-2 border-emerald-600 shrink-0">
-              <img
-                src={currentUser.avatar}
-                alt={currentUser.name}
-                referrerPolicy="no-referrer"
-                className="w-full h-full object-cover"
-              />
-            </div>
+            <ProfilePhoto
+              name={currentUser.name}
+              avatar={currentUser.avatar}
+              onChange={(avatar) => {
+                updatePatientProfile({ avatar });
+                setProfileSavedNotice(avatar ? 'Your profile photo has been updated.' : 'Your profile photo has been removed.');
+                setTimeout(() => setProfileSavedNotice(null), 4000);
+              }}
+            />
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-xl font-serif font-bold text-slate-900">
@@ -1155,11 +1136,11 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
           <button
             type="button"
-            onClick={() => setIsEditingProfile(!isEditingProfile)}
+            onClick={() => (isEditingProfile ? finishEditing() : setIsEditingProfile(true))}
             className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium text-xs flex items-center gap-1.5 transition-colors self-start sm:self-auto cursor-pointer"
           >
             <Edit2 className="w-3.5 h-3.5" />
-            <span>{isEditingProfile ? 'Cancel Edit' : 'Edit Health Details'}</span>
+            <span>{isEditingProfile ? 'Cancel' : 'Edit profile'}</span>
           </button>
         </div>
 
@@ -1182,7 +1163,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           <div className="p-3.5 rounded-xl bg-[#F7F9F7] border border-emerald-900/5">
             <span className="text-[11px] text-slate-500 block">Height</span>
             <span className="text-xl font-bold font-mono text-slate-900">
-              {currentUser.heightCm} cm
+              {currentUser.heightCm != null ? `${currentUser.heightCm} cm` : '—'}
             </span>
           </div>
 
@@ -1195,130 +1176,43 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         </div>
       </div>
 
-      {/* Edit Health Profile Form */}
+      {profileSavedNotice && (
+        <div role="status" className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex items-center gap-2">
+          <CheckCircle className="w-4 h-4 text-emerald-700" aria-hidden="true" />
+          {profileSavedNotice}
+        </div>
+      )}
+
+      {/* My profile: edit form, or personal / medical / goals cards */}
       {isEditingProfile ? (
-        <form onSubmit={handleSaveProfile} className="bg-white rounded-2xl md:rounded-3xl border border-slate-200 p-5 md:p-6 shadow-2xs space-y-4 text-xs">
-          <h2 className="font-bold text-sm text-slate-900">
-            Update Personal & Health Details
-          </h2>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">Age (Years)</label>
-              <input
-                type="number"
-                value={editAge}
-                onChange={(e) => setEditAge(e.target.value)}
-                className="w-full p-2.5 rounded-lg border border-slate-300"
-              />
-            </div>
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">Height (cm)</label>
-              <input
-                type="number"
-                value={editHeight}
-                onChange={(e) => setEditHeight(e.target.value)}
-                className="w-full p-2.5 rounded-lg border border-slate-300"
-              />
-            </div>
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">Current Weight (kg)</label>
-              <input
-                type="number"
-                step="0.1"
-                value={editCurrentWeight}
-                onChange={(e) => setEditCurrentWeight(e.target.value)}
-                className="w-full p-2.5 rounded-lg border border-slate-300"
-              />
-            </div>
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">Target Weight (kg)</label>
-              <input
-                type="number"
-                step="0.1"
-                value={editTargetWeight}
-                onChange={(e) => setEditTargetWeight(e.target.value)}
-                className="w-full p-2.5 rounded-lg border border-slate-300"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">Dietary Preference</label>
-              <select
-                value={editPreference}
-                onChange={(e) => setEditPreference(e.target.value as DietaryPreference)}
-                className="w-full p-2.5 rounded-lg border border-slate-300 bg-white"
-              >
-                <option value="Vegetarian">Vegetarian</option>
-                <option value="Vegan">Vegan</option>
-                <option value="Eggetarian">Eggetarian</option>
-                <option value="Non-Vegetarian">Non-Vegetarian</option>
-                <option value="Jain">Jain Diet</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">Daily Water Goal (Litres)</label>
-              <input
-                type="number"
-                step="0.1"
-                value={editWaterGoal}
-                onChange={(e) => setEditWaterGoal(e.target.value)}
-                className="w-full p-2.5 rounded-lg border border-slate-300"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                Medical Conditions / Symptoms (comma-separated)
-              </label>
-              <input
-                type="text"
-                value={editConditions}
-                onChange={(e) => setEditConditions(e.target.value)}
-                placeholder="e.g. PCOS, Hypothyroidism, Acid Reflux"
-                className="w-full p-2.5 rounded-lg border border-slate-300"
-              />
-            </div>
-
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                Food Allergies or Intolerances
-              </label>
-              <input
-                type="text"
-                value={editAllergies}
-                onChange={(e) => setEditAllergies(e.target.value)}
-                placeholder="e.g. Lactose, Peanuts, Gluten"
-                className="w-full p-2.5 rounded-lg border border-slate-300"
-              />
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={() => setIsEditingProfile(false)}
-              className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 font-medium cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 rounded-xl bg-[#3E6553] text-white font-medium flex items-center gap-1.5 shadow-sm cursor-pointer"
-            >
-              <Save className="w-4 h-4" />
-              <span>Save Changes</span>
-            </button>
-          </div>
-        </form>
+        <EditProfileForm onDone={finishEditing} />
       ) : (
-        /* View Medical & Goals details */
+        /* View personal, medical & goals details */
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="bg-white rounded-2xl p-5 border border-slate-200 space-y-3 md:col-span-2">
+            <h3 className="font-bold text-xs uppercase tracking-wider text-slate-900">Personal Details</h3>
+            <dl className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+              {[
+                { label: 'Email', value: currentUser.email },
+                { label: 'Mobile', value: currentUser.phone },
+                {
+                  label: 'Date of Birth',
+                  value: currentUser.dateOfBirth
+                    ? `${new Date(currentUser.dateOfBirth + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })} (${ageOn(currentUser.dateOfBirth)} yrs)`
+                    : currentUser.age != null
+                      ? `Age ${currentUser.age}`
+                      : undefined,
+                },
+                { label: 'Gender', value: currentUser.gender },
+              ].map((item) => (
+                <div key={item.label} className="min-w-0">
+                  <dt className="text-slate-400 text-[11px]">{item.label}</dt>
+                  <dd className="text-slate-800 font-medium break-all">{item.value || <span className="text-slate-400 font-normal">Not added</span>}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+
           <div className="bg-white rounded-2xl p-5 border border-slate-200 space-y-3">
             <h3 className="font-bold text-xs uppercase tracking-wider text-slate-900">
               Medical Conditions & Allergies

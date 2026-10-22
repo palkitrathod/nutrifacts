@@ -19,6 +19,7 @@ import { DIETITIAN_PROFILE, NUTRITION_SERVICES, CLINICAL_CONDITIONS_DATA } from 
 import { dataApi, diff, markSaved, snapshotOf, type AppData, type Snapshot } from '../data/dataApi';
 import { ApiError } from '../auth/authApi';
 import { formatPhone } from '../shared/authValidation';
+import { addDays, canRenewEarly, isPlanActive, newPlanValidUntil, RENEWAL_BONUS_DAYS, todayIso, upgradeQuote } from '../shared/plans';
 
 /** The signed-in account as returned by the auth API. */
 export interface AccountInfo {
@@ -40,7 +41,6 @@ interface NutritionContextType {
   dailyTrackers: Record<string, DailyTracker>;
   services: NutritionService[];
   selectedPatientId: string; // for dietitian admin viewing
-  viewMode: 'phone' | 'responsive';
   
   // Actions
   /** Loads the signed-in account's data from the server (creating its patient record on first sign-in). */
@@ -55,7 +55,6 @@ interface NutritionContextType {
   syncError: string | null;
   dismissSyncError: () => void;
   setSelectedPatientId: (id: string) => void;
-  toggleViewMode: () => void;
   
   // Diet Chart Actions
   getCurrentUserDietChart: () => DietChart | undefined;
@@ -86,11 +85,21 @@ interface NutritionContextType {
   packages: NutritionPackage[];
   payments: PackagePayment[];
   /** Resolves only once the server has accepted the payment; rejects with the reason otherwise. */
-  processPackagePurchase: (packageId: string, paymentMethod: PaymentMethodType, paymentDetails: string) => Promise<PackagePayment>;
+  /** Buys a plan. With `upgrade`, the current plan's unused days are credited against the price. */
+  processPackagePurchase: (
+    packageId: string,
+    paymentMethod: PaymentMethodType,
+    paymentDetails: string,
+    options?: { upgrade?: boolean; renew?: boolean }
+  ) => Promise<PackagePayment>;
+  /** My Plans: switch to a cheaper (or same-price) plan when the current one ends. */
+  schedulePlanChange: (pkg: NutritionPackage) => void;
+  cancelScheduledPlanChange: () => void;
   updatePackage: (updated: NutritionPackage) => void;
   addPackage: (newPkg: Omit<NutritionPackage, 'id'>) => void;
   togglePackageActive: (packageId: string) => void;
-  refundPayment: (paymentId: string, reason: string) => void;
+  /** Marks a payment refunded; amountInr defaults to the full amount paid. */
+  refundPayment: (paymentId: string, reason: string, amountInr?: number) => void;
   getPatientPayments: (patientId: string) => PackagePayment[];
   getActivePackage: (patientId: string) => PackagePayment | undefined;
 
@@ -131,7 +140,6 @@ const newId = (prefix: string) => {
   return `${prefix}-${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
 };
 
-const todayIso = () => new Date().toISOString().split('T')[0];
 
 /** Today's tracker for a person; yesterday's counts never carry over. */
 export function trackerForToday(tracker: DailyTracker | undefined): DailyTracker {
@@ -159,7 +167,6 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [adherenceRecords, setAdherenceRecords] = useState<MealAdherenceEntry[]>([]);
 
   const [selectedPatientId, setSelectedPatientId] = useState<string>('');
-  const [viewMode, setViewMode] = useState<'phone' | 'responsive'>('phone');
 
   // ── Server sync ─────────────────────────────────────────────────────────
   const [dataOwnerId, setDataOwnerId] = useState<string | null>(null);
@@ -349,10 +356,6 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     },
     [applyData]
   );
-
-  const toggleViewMode = () => {
-    setViewMode((prev) => (prev === 'phone' ? 'responsive' : 'phone'));
-  };
 
   // Privacy rule: Patients can only view their own diet chart
   const getCurrentUserDietChart = () => {
@@ -586,14 +589,21 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const processPackagePurchase = async (
     packageId: string,
     paymentMethod: PaymentMethodType,
-    paymentDetails: string
+    paymentDetails: string,
+    options: { upgrade?: boolean; renew?: boolean } = {}
   ): Promise<PackagePayment> => {
     const pkg = packages.find((p) => p.id === packageId);
     if (!pkg) throw new Error('This plan is no longer available.');
-    const today = new Date().toISOString().split('T')[0];
-    const validUntilDate = new Date(Date.now() + pkg.validityDays * 86400000)
-      .toISOString()
-      .split('T')[0];
+    const today = todayIso();
+    const current = getActivePackage(currentUser.id);
+    const upgradeFrom = options.upgrade ? current : undefined;
+    if (options.upgrade && !isPlanActive(upgradeFrom, today)) throw new Error('Your current plan has ended. Choose a new plan instead.');
+    const renewalOf = options.renew ? current : undefined;
+    if (options.renew && !canRenewEarly(renewalOf, today)) throw new Error('Early renewal is open in the last 7 days of a plan.');
+    const quote = upgradeQuote(upgradeFrom, pkg.priceInr, today, {
+      inFull: !!upgradeFrom && packages.find((p) => p.id === upgradeFrom.packageId)?.creditInFull === true,
+    });
+    const validUntilDate = newPlanValidUntil(pkg.validityDays, today, renewalOf);
 
     const newPayment: PackagePayment = {
       id: newId('pay'),
@@ -604,7 +614,9 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       patientPhone: currentUser.phone || '+91 98000 00000',
       packageId: pkg.id,
       packageTitle: pkg.title,
-      amountInr: pkg.priceInr,
+      amountInr: quote.amountDueInr,
+      ...(upgradeFrom && { listPriceInr: pkg.priceInr, creditInr: quote.creditInr, upgradeFromPaymentId: upgradeFrom.id }),
+      ...(renewalOf && { renewalOfPaymentId: renewalOf.id, bonusDays: RENEWAL_BONUS_DAYS }),
       paymentMethod,
       paymentDetails,
       status: 'successful',
@@ -634,6 +646,7 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               ...p,
               assignedProgram: pkg.title,
               followUpDate: validUntilDate,
+              scheduledPlanChange: undefined, // buying a plan replaces any scheduled change
             }
           : p
       )
@@ -642,13 +655,14 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       ...prev,
       assignedProgram: pkg.title,
       followUpDate: validUntilDate,
+      scheduledPlanChange: undefined,
     }));
 
     // Add notification for patient
     addNotification({
       userId: currentUser.id,
       title: 'Payment Confirmed! 🥗',
-      message: `Your payment of ₹${pkg.priceInr} for ${pkg.title} was successful. Transaction Ref: ${newPayment.transactionRef}. Receipt generated.`,
+      message: `Your payment of ₹${newPayment.amountInr} for ${pkg.title}${upgradeFrom ? ' (upgrade)' : renewalOf ? ` (early renewal, ${RENEWAL_BONUS_DAYS} bonus days added)` : ''} was successful. Transaction Ref: ${newPayment.transactionRef}. Receipt generated.`,
       category: 'care',
     });
 
@@ -656,7 +670,7 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     addNotification({
       userId: DIETITIAN_PROFILE.id,
       title: 'New Package Order Received',
-      message: `${currentUser.name} purchased ${pkg.title} (₹${pkg.priceInr}) via ${paymentMethod.toUpperCase()}.`,
+      message: `${currentUser.name} ${upgradeFrom ? 'upgraded to' : 'purchased'} ${pkg.title} (₹${newPayment.amountInr}) via ${paymentMethod.toUpperCase()}.`,
       category: 'care',
     });
 
@@ -673,6 +687,22 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     });
   };
 
+  const schedulePlanChange = (pkg: NutritionPackage) => {
+    const active = getActivePackage(currentUser.id);
+    if (!isPlanActive(active)) return;
+    updatePatientProfile({
+      scheduledPlanChange: { packageId: pkg.id, packageTitle: pkg.title, effectiveDate: addDays(active.validUntil, 1) },
+    });
+    addNotification({
+      userId: DIETITIAN_PROFILE.id,
+      title: 'Plan Change Scheduled',
+      message: `${currentUser.name} will move from ${active.packageTitle} to ${pkg.title} on ${addDays(active.validUntil, 1)}.`,
+      category: 'care',
+    });
+  };
+
+  const cancelScheduledPlanChange = () => updatePatientProfile({ scheduledPlanChange: undefined });
+
   const addPackage = (newPkg: Omit<NutritionPackage, 'id'>) => {
     const created: NutritionPackage = {
       ...newPkg,
@@ -687,8 +717,10 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     );
   };
 
-  const refundPayment = (paymentId: string, reason: string) => {
-    const today = new Date().toISOString().split('T')[0];
+  const refundPayment = (paymentId: string, reason: string, amountInr?: number) => {
+    const today = todayIso();
+    const payment = payments.find((p) => p.id === paymentId);
+    const refundAmountInr = amountInr ?? payment?.amountInr ?? 0;
     setPayments((prev) =>
       prev.map((pay) =>
         pay.id === paymentId
@@ -697,17 +729,17 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               status: 'refunded',
               refundReason: reason,
               refundedAt: today,
+              refundAmountInr,
             }
           : pay
       )
     );
 
-    const payment = payments.find((p) => p.id === paymentId);
     if (payment) {
       addNotification({
         userId: payment.patientId,
         title: 'Refund Processed',
-        message: `Refund of ₹${payment.amountInr} for ${payment.packageTitle} has been processed. Reason: ${reason}.`,
+        message: `Refund of ₹${refundAmountInr} for ${payment.packageTitle} has been processed. Reason: ${reason}.`,
         category: 'care',
       });
     }
@@ -854,7 +886,6 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         payments,
         adherenceRecords,
         selectedPatientId,
-        viewMode,
         activateAccount,
         flushPendingChanges,
         resetData,
@@ -862,7 +893,6 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         syncError,
         dismissSyncError: () => setSyncError(null),
         setSelectedPatientId,
-        toggleViewMode,
         getCurrentUserDietChart,
         getPatientDietChart,
         saveDietChart,
@@ -878,6 +908,8 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         getAdherenceStats,
         assignClinicalConditionDiet,
         processPackagePurchase,
+        schedulePlanChange,
+        cancelScheduledPlanChange,
         updatePackage,
         addPackage,
         togglePackageActive,

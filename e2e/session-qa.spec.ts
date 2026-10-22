@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { verifyInBrowser } from './mail';
 
 // Session robustness: multiple tabs, flaky networks, insecure (LAN) origins, password change and
 // clinic reset, redirects, layout stability on errors, and production security headers.
@@ -23,6 +24,7 @@ async function signUp(page: Page, email: string, password = 'Healthy123', name =
   await page.getByLabel('Confirm password', { exact: true }).fill(password);
   await page.getByRole('checkbox', { name: /i agree/i }).check();
   await page.getByRole('button', { name: /create account/i }).click();
+  await verifyInBrowser(page, email);
   await expect(page).toHaveURL('/app');
 }
 
@@ -132,7 +134,7 @@ test('works when opened over plain http on a LAN address (no crypto.randomUUID)'
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await signUp(page, unique('lan'));
-  await page.locator('nav').last().getByRole('button', { name: 'Track', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Track', exact: true }).click();
   await page.getByRole('button', { name: /record new weight/i }).click();
   await page.locator('input[type="number"]').first().fill('64.5');
   const saved = page.waitForResponse((r) => r.url().endsWith('/api/data/batch'));
@@ -176,7 +178,7 @@ test.describe('passwords', () => {
     await signUp(patient, email, 'Healthy123', name);
 
     await signIn(page, 'anchaldewan380@gmail.com');
-    await page.locator('nav').last().getByRole('button', { name: 'Admin', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Admin', exact: true }).click();
     await page.getByPlaceholder(/search patient/i).fill(name);
     await page.getByRole('button', { name: 'Reset Password' }).click();
     const dialog = page.getByRole('dialog', { name: 'Reset password' });
@@ -201,13 +203,17 @@ test('"next" survives switching from sign-in to sign-up', async ({ page }) => {
   await page.getByRole('link', { name: 'Create an account' }).click();
   await expect(page).toHaveURL('/signup?next=%2Fapp%3Ftab%3Dplans');
   // The email typed on sign-in is carried over.
-  await expect(page.getByLabel('Email address')).toHaveValue(/qa\.session\.next/);
+  const email = await page.getByLabel('Email address').inputValue();
+  expect(email).toMatch(/qa\.session\.next/);
   await page.getByLabel('Full name').fill('Next Tester');
   await page.getByLabel('Mobile number (WhatsApp)').fill('9876543210');
   await page.getByLabel('Password', { exact: true }).fill('Healthy123');
   await page.getByLabel('Confirm password', { exact: true }).fill('Healthy123');
   await page.getByRole('checkbox', { name: /i agree/i }).check();
   await page.getByRole('button', { name: /create account/i }).click();
+  // …and through the email-verification step.
+  await expect(page).toHaveURL('/verify-email?next=%2Fapp%3Ftab%3Dplans');
+  await verifyInBrowser(page, email);
   await expect(page).toHaveURL('/app?tab=plans');
 });
 

@@ -172,13 +172,13 @@ export const DietChartScreen: React.FC<DietChartScreenProps> = ({ onOpenPdfModal
   };
 
   return (
-    <div className="flex-1 pb-16 space-y-5 px-4 pt-4 md:px-8 md:pt-6 max-w-5xl mx-auto w-full">
+    <div className="flex-1 pb-16 space-y-5 px-4 pt-4 md:px-8 md:pt-6 max-w-5xl xl:max-w-6xl 2xl:max-w-7xl mx-auto w-full">
       
       {/* Dietitian Admin Patient Selector & Action Bar */}
       {isDietitian && (
         <div className="bg-emerald-950 text-white rounded-2xl p-4 shadow-sm border border-emerald-900 space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="min-w-0">
               <div className="flex items-center gap-1.5 text-emerald-300 text-xs font-semibold uppercase tracking-wider">
                 <Shield className="w-3.5 h-3.5" />
                 <span>Clinical Weekly Diet Chart Manager</span>
@@ -189,15 +189,15 @@ export const DietChartScreen: React.FC<DietChartScreenProps> = ({ onOpenPdfModal
             </div>
 
             {/* Patient dropdown */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-emerald-200">Patient:</span>
+            <div className="flex items-center gap-2 min-w-0 w-full lg:w-auto">
+              <span className="text-xs text-emerald-200 shrink-0">Patient:</span>
               <select
                 value={selectedPatientId}
                 onChange={(e) => {
                   setSelectedPatientId(e.target.value);
                   setIsEditing(false);
                 }}
-                className="bg-emerald-900 text-white text-xs px-3 py-1.5 rounded-lg border border-emerald-700 focus:outline-hidden"
+                className="min-w-0 flex-1 lg:flex-none lg:max-w-xs truncate bg-emerald-900 text-white text-xs px-3 py-1.5 rounded-lg border border-emerald-700 focus:outline-hidden"
               >
                 {patients.map((p) => (
                   <option key={p.id} value={p.id}>

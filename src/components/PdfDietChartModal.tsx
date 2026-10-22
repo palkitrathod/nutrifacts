@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import { X, Printer, Download, FileText, CheckCircle2, AlertCircle, Shield, Award } from 'lucide-react';
 import { DietChart, User } from '../types/nutrition';
+import { useEscapeToClose } from './useEscapeToClose';
 
 interface PdfDietChartModalProps {
   chart: DietChart;
@@ -9,6 +10,7 @@ interface PdfDietChartModalProps {
 }
 
 export const PdfDietChartModal: React.FC<PdfDietChartModalProps> = ({ chart, patient, onClose }) => {
+  useEscapeToClose(true, onClose);
   const chartRef = useRef<HTMLDivElement>(null);
 
   const handlePrint = () => {
@@ -60,23 +62,27 @@ export const PdfDietChartModal: React.FC<PdfDietChartModalProps> = ({ chart, pat
       <div className="bg-white w-full max-w-4xl max-h-[94vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-200">
 
         {/* Modal Header Bar (Hidden during Print) */}
-        <div className="no-print bg-[#3E6553] text-white px-5 py-3.5 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center">
+        <div className="no-print bg-[#3E6553] text-white px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center shrink-0">
               <FileText className="w-4 h-4" />
             </div>
-            <div>
-              <h3 className="font-semibold text-sm">Official Clinical Diet Chart (PDF Preview)</h3>
-              <p className="text-xs text-emerald-100 font-light">
+            <div className="min-w-0">
+              <h3 className="font-semibold text-sm truncate">
+                <span className="sm:hidden">Diet Chart</span>
+                <span className="hidden sm:inline">Official Clinical Diet Chart (PDF Preview)</span>
+              </h3>
+              <p className="text-xs text-emerald-100 font-light truncate hidden sm:block">
                 {patient.name} · Version {chart.version} · Confidential Patient Record
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={handlePrint}
+              aria-label="Print or save as PDF"
               className="py-1.5 px-3 rounded-lg bg-white/15 hover:bg-white/25 text-white text-xs font-medium flex items-center gap-1.5 transition-colors"
               title="Print or Save as PDF"
             >
@@ -89,6 +95,7 @@ export const PdfDietChartModal: React.FC<PdfDietChartModalProps> = ({ chart, pat
               onClick={handleDownloadText}
               className="py-1.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium flex items-center gap-1.5 transition-colors"
               title="Download Diet Chart file"
+              aria-label="Download diet chart"
             >
               <Download className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Download Chart</span>
@@ -97,6 +104,7 @@ export const PdfDietChartModal: React.FC<PdfDietChartModalProps> = ({ chart, pat
             <button
               type="button"
               onClick={onClose}
+              aria-label="Close"
               className="w-8 h-8 rounded-full hover:bg-white/20 flex items-center justify-center text-white/90 hover:text-white ml-1"
             >
               <X className="w-5 h-5" />

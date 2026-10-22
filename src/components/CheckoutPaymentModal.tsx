@@ -13,15 +13,23 @@ import {
   FileText,
   AlertCircle,
   Clock,
+  CalendarPlus,
+  Gift,
 } from 'lucide-react';
 import { useNutrition } from '../context/NutritionContext';
 import { NutritionPackage, PaymentMethodType, PackagePayment } from '../types/nutrition';
+import { newPlanValidUntil, RENEWAL_BONUS_DAYS, todayIso, upgradeQuote } from '../shared/plans';
+import { useEscapeToClose } from './useEscapeToClose';
 
 interface CheckoutPaymentModalProps {
   packageItem: NutritionPackage;
   isOpen: boolean;
   onClose: () => void;
   onSuccess: (payment: PackagePayment) => void;
+  /** Upgrade from the current plan: the unused days are credited against the price. */
+  upgrade?: boolean;
+  /** Early renewal: starts after the current plan ends, with bonus days. */
+  renew?: boolean;
 }
 
 export const CheckoutPaymentModal: React.FC<CheckoutPaymentModalProps> = ({
@@ -29,10 +37,17 @@ export const CheckoutPaymentModal: React.FC<CheckoutPaymentModalProps> = ({
   isOpen,
   onClose,
   onSuccess,
+  upgrade = false,
+  renew = false,
 }) => {
-  const { currentUser, packages, processPackagePurchase } = useNutrition();
+  const { currentUser, packages, processPackagePurchase, getActivePackage } = useNutrition();
   // Always show the live price: it is refreshed if the clinic changes it while this is open.
   const packageItem = packages.find((p) => p.id === packageAtOpen.id) ?? packageAtOpen;
+  const activePlan = getActivePackage(currentUser.id);
+  const currentPlan = upgrade ? activePlan : undefined;
+  const inFull = !!currentPlan && packages.find((p) => p.id === currentPlan.packageId)?.creditInFull === true;
+  const { creditInr, amountDueInr } = upgradeQuote(currentPlan, packageItem.priceInr, todayIso(), { inFull });
+  const renewalOf = renew ? activePlan : undefined;
 
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType>('upi');
   const [upiId, setUpiId] = useState('');
@@ -50,6 +65,12 @@ export const CheckoutPaymentModal: React.FC<CheckoutPaymentModalProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [completedPayment, setCompletedPayment] = useState<PackagePayment | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
+
+  // Not while a payment is being processed; after success, closing shows the receipt as the button does.
+  useEscapeToClose(isOpen && !isProcessing, () => {
+    if (completedPayment) onSuccess(completedPayment);
+    onClose();
+  });
 
   if (!isOpen) return null;
 
@@ -69,7 +90,7 @@ export const CheckoutPaymentModal: React.FC<CheckoutPaymentModalProps> = ({
     }
 
     try {
-      setCompletedPayment(await processPackagePurchase(packageItem.id, paymentMethod, details));
+      setCompletedPayment(await processPackagePurchase(packageItem.id, paymentMethod, details, { upgrade, renew }));
     } catch (err) {
       setPayError(
         err instanceof Error && err.message
@@ -109,6 +130,7 @@ export const CheckoutPaymentModal: React.FC<CheckoutPaymentModalProps> = ({
             <button
               type="button"
               onClick={onClose}
+              aria-label="Close"
               className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/80 hover:text-white"
             >
               <X className="w-5 h-5" />
@@ -180,7 +202,7 @@ export const CheckoutPaymentModal: React.FC<CheckoutPaymentModalProps> = ({
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">
-                    Selected Nutrition Package
+                    {upgrade ? 'Upgrade to' : renew ? 'Renew early' : 'Selected Nutrition Package'}
                   </span>
                   <h4 className="font-bold text-sm text-slate-900">{packageItem.title}</h4>
                   <p className="text-[11px] text-slate-600 mt-0.5">{packageItem.durationLabel}</p>
@@ -192,6 +214,38 @@ export const CheckoutPaymentModal: React.FC<CheckoutPaymentModalProps> = ({
                   <span className="block text-[10px] text-emerald-800 font-medium">All taxes incl.</span>
                 </div>
               </div>
+
+              {upgrade && currentPlan && (
+                <dl className="pt-2 border-t border-emerald-200/60 space-y-1 text-[11px]">
+                  <div className="flex justify-between gap-2 text-slate-600">
+                    <dt>Plan price</dt>
+                    <dd className="font-mono">₹{packageItem.priceInr}</dd>
+                  </div>
+                  <div className="flex justify-between gap-2 text-emerald-800">
+                    <dt className="flex items-center gap-1">
+                      <Gift className="w-3 h-3 shrink-0" aria-hidden="true" />
+                      {inFull ? `Your ${currentPlan.packageTitle} (credited in full)` : `Credit for unused days of ${currentPlan.packageTitle}`}
+                    </dt>
+                    <dd className="font-mono shrink-0">− ₹{creditInr}</dd>
+                  </div>
+                  <div className="flex justify-between gap-2 font-bold text-slate-900 text-xs pt-1 border-t border-emerald-200/60">
+                    <dt>To pay today</dt>
+                    <dd className="font-mono">₹{amountDueInr}</dd>
+                  </div>
+                  <p className="text-[10px] text-slate-500">Your new plan starts today and runs for {packageItem.validityDays} days.</p>
+                </dl>
+              )}
+
+              {renew && renewalOf && (
+                <p className="pt-2 border-t border-emerald-200/60 flex items-start gap-1.5 text-[11px] text-emerald-900">
+                  <CalendarPlus className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
+                  <span>
+                    Starts after your current plan ends on <strong>{renewalOf.validUntil}</strong>, and includes{' '}
+                    <strong>{RENEWAL_BONUS_DAYS} extra days free</strong>: valid until{' '}
+                    <strong>{newPlanValidUntil(packageItem.validityDays, todayIso(), renewalOf)}</strong>.
+                  </span>
+                </p>
+              )}
 
               {/* Inclusions preview */}
               <ul className="pt-2 border-t border-emerald-200/60 space-y-1 text-[11px] text-slate-600">
@@ -428,7 +482,7 @@ export const CheckoutPaymentModal: React.FC<CheckoutPaymentModalProps> = ({
               ) : (
                 <>
                   <Lock className="w-3.5 h-3.5" />
-                  <span>Pay ₹{packageItem.priceInr} & Activate Package</span>
+                  <span>Pay ₹{amountDueInr} & {upgrade ? 'Upgrade Plan' : renew ? 'Renew Plan' : 'Activate Package'}</span>
                 </>
               )}
             </button>
