@@ -10,6 +10,10 @@ export const gatewayFee = (amountInr: number) => Math.round(amountInr * GATEWAY_
 /** What reaches the clinic. */
 export const netAmount = (amountInr: number) => amountInr - gatewayFee(amountInr);
 
+/** Consultation fees when not covered by a plan. The first consultation is the "First Consultation" plan. */
+export const FIRST_CONSULTATION_INR = 499;
+export const FOLLOW_UP_INR = 300;
+
 /** The refund promise applies within this many days of purchase. */
 export const REFUND_PROMISE_DAYS = 7;
 

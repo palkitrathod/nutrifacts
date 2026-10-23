@@ -30,6 +30,8 @@ interface CheckoutPaymentModalProps {
   upgrade?: boolean;
   /** Early renewal: starts after the current plan ends, with bonus days. */
   renew?: boolean;
+  /** The goal chosen for a plan with goals (e.g. "Weight goal"). */
+  goal?: string;
 }
 
 export const CheckoutPaymentModal: React.FC<CheckoutPaymentModalProps> = ({
@@ -39,6 +41,7 @@ export const CheckoutPaymentModal: React.FC<CheckoutPaymentModalProps> = ({
   onSuccess,
   upgrade = false,
   renew = false,
+  goal,
 }) => {
   const { currentUser, packages, processPackagePurchase, getActivePackage } = useNutrition();
   // Always show the live price: it is refreshed if the clinic changes it while this is open.
@@ -90,7 +93,7 @@ export const CheckoutPaymentModal: React.FC<CheckoutPaymentModalProps> = ({
     }
 
     try {
-      setCompletedPayment(await processPackagePurchase(packageItem.id, paymentMethod, details, { upgrade, renew }));
+      setCompletedPayment(await processPackagePurchase(packageItem.id, paymentMethod, details, { upgrade, renew, goal }));
     } catch (err) {
       setPayError(
         err instanceof Error && err.message
@@ -206,6 +209,7 @@ export const CheckoutPaymentModal: React.FC<CheckoutPaymentModalProps> = ({
                   </span>
                   <h4 className="font-bold text-sm text-slate-900">{packageItem.title}</h4>
                   <p className="text-[11px] text-slate-600 mt-0.5">{packageItem.durationLabel}</p>
+                  {goal && <p className="text-[11px] font-semibold text-emerald-800 mt-0.5">Goal: {goal}</p>}
                 </div>
                 <div className="text-right">
                   <span className="text-base font-extrabold font-mono text-slate-900">

@@ -130,6 +130,16 @@ const appData = async (page: Page | APIRequestContext): Promise<Data> => {
 const tab = (page: Page, label: string) => page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: label, exact: true }).click();
 /** The full-screen overlay of a modal, found by a piece of its text. */
 const modal = (page: Page, text: string | RegExp) => page.locator('div.fixed.inset-0').filter({ hasText: text });
+
+/** Pays in the (demo) checkout by UPI, then closes the receipt. */
+async function payByUpi(page: Page, pay: string | RegExp) {
+  const checkout = modal(page, 'Secure Payment Gateway');
+  await checkout.getByRole('textbox').first().fill('meera@okhdfcbank');
+  await checkout.getByRole('button', { name: pay }).click();
+  await expect(checkout.getByText('Payment Successful!')).toBeVisible();
+  await checkout.getByRole('button', { name: /Go to My Diet & Schedule/ }).click();
+  await modal(page, 'Payment Receipt & Tax Invoice').locator('button').nth(2).click();
+}
 const nextSave = (page: Page) =>
   page.waitForResponse((r) => r.url().endsWith('/api/data/batch') && r.request().method() === 'POST');
 /** Enters a UPI id (checkout has no pre-filled sample details) — no-op for other methods. */
@@ -140,7 +150,7 @@ async function fillUpi(checkout: Locator) {
 const bell = (page: Page) => page.getByRole('button', { name: 'View notifications' });
 const unreadBadge = (page: Page) => bell(page).locator('span');
 /** Nearest ancestor <div> of `inner` whose class list contains `cls`. */
-const ancestor = (inner: Locator, cls: string) => inner.locator(`xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' ${cls} ')][1]`);
+const ancestor = (inner: Locator, cls: string) => inner.locator(`xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ${cls} ')][1]`);
 
 async function badgeCount(page: Page) {
   if ((await unreadBadge(page).count()) === 0) return 0;
@@ -164,15 +174,15 @@ test.describe('patient', () => {
     await book.locator('select').nth(1).selectOption('04:00 PM – 04:30 PM');
     await book.locator('textarea').fill('E2E: irregular cycles, want PCOS plan');
 
-    const saved = nextSave(page);
-    await book.getByRole('button', { name: /Confirm Booking/ }).click();
-    await expect(book.getByText('Consultation Scheduled!')).toBeVisible();
-    expect((await saved).status()).toBe(200);
+    // No plan yet: the First Consultation is paid online first (₹499), and booked once paid.
+    await book.getByRole('button', { name: /Continue to Pay ₹499/ }).click();
     await expect(book).toBeHidden({ timeout: 5000 });
+    await payByUpi(page, 'Pay ₹499 & Activate Package');
 
     // Server has it: confirmed, video link, notification.
+    await expect.poll(async () => (await appData(page)).appointments.length).toBe(1);
     const data = await appData(page);
-    expect(data.appointments).toHaveLength(1);
+    expect(data.payments.filter((p: Data) => p.patientId === me.id)).toEqual([expect.objectContaining({ packageId: 'pkg-basic-consultation', amountInr: 499 })]);
     const appt = data.appointments[0];
     expect(appt).toMatchObject({ patientId: me.id, status: 'confirmed', consultationType: 'online_video', date, timeSlot: '04:00 PM – 04:30 PM' });
     expect(appt.meetingLink).toMatch(/^https:\/\/meet\.google\.com\//);
@@ -519,11 +529,11 @@ test.describe('patient', () => {
     await expect(pdf).toContainText('Priya Sharma');
     await expect(pdf).toContainText('Daily Calorie Target');
 
-    await pdf.getByRole('button', { name: /Print \/ Save PDF/ }).click();
+    await pdf.getByRole('button', { name: 'Print or save as PDF' }).click();
     expect(await page.evaluate(() => (window as unknown as { __printed: number }).__printed)).toBe(1);
 
     const download = page.waitForEvent('download');
-    await pdf.getByRole('button', { name: /Download Chart/ }).click();
+    await pdf.getByRole('button', { name: 'Download diet chart' }).click();
     expect((await download).suggestedFilename()).toMatch(/^Nutrifacts_DietChart_Priya_Sharma_v.+\.txt$/);
 
     await pdf.locator('button').nth(2).click();
@@ -546,29 +556,46 @@ test.describe('patient', () => {
   });
 
   test('booking from a service card pre-selects that service', async ({ page, guard }) => {
-    // Regression test (fixed): BookAppointmentModal is always mounted and copies `preselectedService` into state only once
-    // (BookAppointmentModal.tsx:25-27), so the service chosen on Home is ignored.
+    // Regression test (fixed): BookAppointmentModal is always mounted and used to copy `preselectedService` into state
+    // only once, so the service chosen on Home was ignored. Medical programs start with a First Consultation booking.
     await newPatient(page, 'svc');
-    await page.getByRole('tab', { name: /^Lifestyle Conditions/ }).click();
-    await page.getByRole('article', { name: 'Lifestyle Diseases' }).getByRole('button', { name: /Details/ }).click();
-    await page.getByRole('dialog', { name: 'Lifestyle Diseases' }).getByRole('button', { name: 'Book Consultation' }).click();
+    await page.getByRole('tab', { name: /^Medical Nutrition Support/ }).click();
+    await page.getByRole('article', { name: 'Oncology Nutrition Support' }).getByRole('button', { name: /Details/ }).click();
+    await page.getByRole('dialog', { name: 'Oncology Nutrition Support' }).getByRole('button', { name: 'Book first consultation' }).click();
     const book = modal(page, 'Book Consultation with Dt. Anchal');
-    await expect(book.locator('select').first()).toHaveValue('Lifestyle Diseases', { timeout: 2000 });
+    await expect(book.locator('select').first()).toHaveValue('Oncology Nutrition Support', { timeout: 2000 });
     await guard.check();
   });
 
-  test('second booking in the same session defaults to the ₹300 follow-up', async ({ page, guard }) => {
-    // Regression test (fixed): the first/follow-up default is computed once when the modal mounts
-    // (BookAppointmentModal.tsx:21-24), so after a first booking the next one still defaults to ₹500.
+  test('a condition program is chosen and paid online for the picked length', async ({ page, guard }) => {
+    await newPatient(page, 'prog');
+    await page.getByRole('tab', { name: /^Lifestyle Conditions/ }).click();
+    const card = page.getByRole('article', { name: 'Lifestyle Diseases' });
+    await card.getByRole('radio', { name: /^6 months/ }).click();
+    await card.getByRole('button', { name: /^Choose · ₹/ }).click();
+    await expect(modal(page, 'Secure Payment Gateway')).toContainText('Lifestyle Diseases (6 months)');
+    await payByUpi(page, /^Pay ₹[\d,]+ & Activate Package$/);
+    await expect.poll(async () => (await appData(page)).payments.map((p: Data) => p.packageId)).toContain('prog-lifestyle-diseases-6m');
+    await guard.check();
+  });
+
+  test('second booking in the same session defaults to the follow-up, included in the plan', async ({ page, guard }) => {
+    // Regression test (fixed): the first/follow-up default used to be computed once when the modal mounted,
+    // so after a first booking the next one still defaulted to the first consultation.
     await newPatient(page, 'book2');
     await page.getByRole('button', { name: 'Book Consultation' }).first().click();
     let book = modal(page, 'Book Consultation with Dt. Anchal');
-    await expect(book.getByRole('button', { name: /Payable: ₹500/ })).toBeVisible();
-    await book.getByRole('button', { name: /Confirm Booking/ }).click();
-    await expect(book).toBeHidden({ timeout: 5000 });
+    await expect(book.getByRole('button', { name: /Continue to Pay ₹499/ })).toBeVisible();
+    // Without paying, a follow-up is ₹300.
+    await book.getByRole('button', { name: /Follow-up Session/ }).click();
+    await expect(book.getByRole('button', { name: /Payable: ₹300/ })).toBeVisible();
+    await book.getByRole('button', { name: /First Consultation/ }).click();
+    await book.getByRole('button', { name: /Continue to Pay ₹499/ }).click();
+    await payByUpi(page, 'Pay ₹499 & Activate Package');
+    await expect.poll(async () => (await appData(page)).appointments.length).toBe(1);
     await page.getByRole('button', { name: 'Book Consultation' }).first().click();
     book = modal(page, 'Book Consultation with Dt. Anchal');
-    await expect(book.getByRole('button', { name: /Payable: ₹300/ })).toBeVisible({ timeout: 2000 });
+    await expect(book.getByRole('button', { name: /Confirm Booking \(Included in your plan\)/ })).toBeVisible({ timeout: 2000 });
     await guard.check();
   });
 
@@ -592,7 +619,7 @@ test.describe('patient', () => {
     const pkg = (await appData(dt)).packages.find((p: Data) => p.id === 'pkg-basic-consultation');
     await dt.post('/api/data/batch', { data: { ops: [{ collection: 'packages', id: pkg.id, data: { ...pkg, priceInr: pkg.priceInr + 50 } }] } });
     try {
-      await ancestor(page.getByRole('heading', { name: 'Starter Consultation', exact: true }), 'rounded-2xl').getByRole('button', { name: /Choose this plan/ }).click();
+      await ancestor(page.getByRole('heading', { name: 'First Consultation', exact: true }), 'rounded-2xl').getByRole('button', { name: /Choose this plan/ }).click();
       const checkout = modal(page, 'Secure Payment Gateway');
       await fillUpi(checkout);
       guard.allow(/400 POST .*\/api\/data\/batch/, /status of 400/);
@@ -719,9 +746,10 @@ test.describe('dietitian', () => {
     const patient = guard.watch(await ctx.newPage(), 'patient');
     const me = await newPatient(patient, 'apptstatus');
     await patient.getByRole('button', { name: 'Book Consultation' }).first().click();
-    const saved1 = nextSave(patient);
-    await modal(patient, 'Book Consultation with Dt. Anchal').getByRole('button', { name: /Confirm Booking/ }).click();
-    expect((await saved1).status()).toBe(200);
+    // Without a plan, the First Consultation is paid online, then booked.
+    await modal(patient, 'Book Consultation with Dt. Anchal').getByRole('button', { name: /Continue to Pay ₹499/ }).click();
+    await payByUpi(patient, 'Pay ₹499 & Activate Package');
+    await expect.poll(async () => (await appData(patient)).appointments.length).toBe(1);
 
     await signIn(page, DIETITIAN);
     await tab(page, 'Admin');
@@ -750,7 +778,7 @@ test.describe('dietitian', () => {
   test('12. manage pricing: a price change and a deactivated plan show on the public page', async ({ page, guard, browser }) => {
     await signIn(page, DIETITIAN);
     await tab(page, 'Pricing');
-    const card = () => ancestor(page.getByRole('heading', { name: 'Starter Consultation', exact: true }), 'rounded-2xl');
+    const card = () => ancestor(page.getByRole('heading', { name: 'First Consultation', exact: true }), 'rounded-2xl');
     const originalPrice = 499;
     await expect(card()).toContainText(`₹${originalPrice}`);
 
@@ -766,7 +794,7 @@ test.describe('dietitian', () => {
 
     const publicCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const pub = guard.watch(await publicCtx.newPage(), 'public');
-    const publicCard = () => ancestor(pub.locator('#pricing').getByRole('heading', { name: 'Starter Consultation', exact: true }), 'rounded-2xl');
+    const publicCard = () => ancestor(pub.locator('#pricing').getByRole('heading', { name: 'First Consultation', exact: true }), 'rounded-2xl');
     try {
       await setPrice(549);
       await pub.goto('/#pricing');
@@ -779,7 +807,7 @@ test.describe('dietitian', () => {
       await expect(card()).toContainText('Inactive');
       await pub.reload();
       await expect(pub.locator('#pricing').getByRole('heading', { name: 'Personalised Diet Plan', exact: true })).toBeVisible();
-      await expect(pub.locator('#pricing').getByRole('heading', { name: 'Starter Consultation', exact: true })).toHaveCount(0);
+      await expect(pub.locator('#pricing').getByRole('heading', { name: 'First Consultation', exact: true })).toHaveCount(0);
 
       // Restore.
       saved = nextSave(page);
@@ -804,7 +832,7 @@ test.describe('dietitian', () => {
     const patient = guard.watch(await ctx.newPage(), 'patient');
     const me = await newPatient(patient, 'refund');
     await tab(patient, 'My Plans');
-    await ancestor(patient.getByRole('heading', { name: 'Starter Consultation', exact: true }), 'rounded-2xl').getByRole('button', { name: /Choose this plan/ }).click();
+    await ancestor(patient.getByRole('heading', { name: 'First Consultation', exact: true }), 'rounded-2xl').getByRole('button', { name: /Choose this plan/ }).click();
     const checkout = modal(patient, 'Secure Payment Gateway');
     const paid = nextSave(patient);
     await fillUpi(checkout);

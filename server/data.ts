@@ -8,7 +8,7 @@ import {
   INITIAL_DAILY_TRACKER,
   INITIAL_DIET_CHARTS,
   INITIAL_NOTIFICATIONS,
-  INITIAL_PACKAGES,
+  SEED_PACKAGES,
   INITIAL_PATIENTS,
   INITIAL_PAYMENTS,
   INITIAL_WEIGHT_RECORDS,
@@ -109,10 +109,10 @@ export function seedData(db: Db, opts: { demoRecords: boolean }) {
   db.exec('BEGIN');
   try {
     // Inserted in reverse so that reading newest-first returns each list in its original order.
-    if (!hasAny('packages')) for (const p of [...INITIAL_PACKAGES].reverse()) put(db, 'packages', p.id, p as unknown as Rec);
+    if (!hasAny('packages')) for (const p of [...SEED_PACKAGES].reverse()) put(db, 'packages', p.id, p as unknown as Rec);
     // The clinic's core plans get newer descriptions and new plans, keeping the price and on/off switch the
     // dietitian may have set. Plans the dietitian created are never touched.
-    for (const p of INITIAL_PACKAGES) {
+    for (const p of SEED_PACKAGES) {
       const existing = get(db, 'packages', p.id);
       if (!existing) put(db, 'packages', p.id, p as unknown as Rec);
       else if (Number(existing.catalogVersion ?? 0) < CATALOG_VERSION) {
@@ -296,6 +296,12 @@ function authorize(db: Db, user: UserRow, op: WriteOp): Rec {
       if (!pkg || pkg.isActive !== true) throw new Invalid('This plan is no longer available.');
       if (data.status !== 'successful') throw new Invalid('Invalid payment status.');
       if (data.packageTitle !== pkg.title) throw new Invalid('The amount does not match the current price.');
+      // A goal (e.g. "Weight goal") must be one the plan offers; it's set on the plan's 1-month version.
+      if (data.goal !== undefined) {
+        const base = pkg.bundleOf ? get(db, 'packages', String((pkg.bundleOf as { packageId: string }).packageId)) : pkg;
+        const goals = (Array.isArray(base?.goals) ? base!.goals : []) as Array<{ label: string }>;
+        if (!goals.some((g) => g.label === data.goal)) throw new Invalid('Please choose one of this plan’s goals.');
+      }
       const price = Number(pkg.priceInr);
       const validity = Number(pkg.validityDays);
       const wrongAmount = () => new Invalid('The amount does not match the current price.');

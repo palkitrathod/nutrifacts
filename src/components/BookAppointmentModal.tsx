@@ -1,22 +1,34 @@
 import React, { useEffect, useState } from 'react';
 import { X, Calendar, Clock, Video, MapPin, CheckCircle, Sparkles, User, Phone, Tag, ShieldCheck, HeartPulse } from 'lucide-react';
 import { useNutrition } from '../context/NutritionContext';
-import { ConsultationType, ConsultationTier } from '../types/nutrition';
+import { Appointment, ConsultationType, ConsultationTier } from '../types/nutrition';
 import { useEscapeToClose } from './useEscapeToClose';
 import { SERVICE_GROUPS } from './ServiceCatalog';
+import { FIRST_CONSULTATION_INR, FOLLOW_UP_INR } from '../shared/pricing';
+import { isPlanActive } from '../shared/plans';
+
+export type BookingRequest = Omit<Appointment, 'id' | 'status' | 'createdAt'>;
 
 interface BookAppointmentModalProps {
   isOpen: boolean;
   onClose: () => void;
   preselectedService?: string;
+  /**
+   * Someone without a plan pays the First Consultation online before it is booked: the modal hands the
+   * booking over and closes, and the app books it once the payment succeeds.
+   */
+  onPayFirstConsultation?: (booking: BookingRequest) => void;
 }
 
 export const BookAppointmentModal: React.FC<BookAppointmentModalProps> = ({
   isOpen,
   onClose,
   preselectedService,
+  onPayFirstConsultation,
 }) => {
-  const { currentUser, services, appointments, bookAppointment } = useNutrition();
+  const { currentUser, services, appointments, packages, bookAppointment, getActivePackage } = useNutrition();
+  const hasPlan = isPlanActive(getActivePackage(currentUser.id));
+  const firstConsultationPlan = packages.find((p) => p.id === 'pkg-basic-consultation' && p.isActive);
 
   // Check if patient already has previous appointments to recommend follow-up vs first consultation
   const patientPastAppointments = appointments.filter((a) => a.patientId === currentUser.id);
@@ -49,7 +61,10 @@ export const BookAppointmentModal: React.FC<BookAppointmentModalProps> = ({
 
   if (!isOpen) return null;
 
-  const consultationFee = consultationTier === 'first_consultation' ? 500 : 300;
+  const listFee = consultationTier === 'first_consultation' ? FIRST_CONSULTATION_INR : FOLLOW_UP_INR;
+  // Sessions are included in a running plan; without one, the First Consultation is paid online first.
+  const consultationFee = hasPlan ? 0 : listFee;
+  const payFirst = !hasPlan && consultationTier === 'first_consultation' && !!firstConsultationPlan && !!onPayFirstConsultation;
 
   const timeSlots = [
     '10:00 AM – 10:30 AM',
@@ -62,7 +77,7 @@ export const BookAppointmentModal: React.FC<BookAppointmentModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    bookAppointment({
+    const booking: BookingRequest = {
       patientId: currentUser.id,
       patientName: currentUser.name,
       patientPhone: currentUser.phone || '+91 98000 00000',
@@ -75,7 +90,14 @@ export const BookAppointmentModal: React.FC<BookAppointmentModalProps> = ({
       patientNotes: patientNotes.trim() || (consultationTier === 'first_consultation'
         ? 'First comprehensive nutrition intake, health condition, and lifestyle assessment'
         : 'Follow-up progress review and diet plan adaptation'),
-    });
+    };
+    if (payFirst) {
+      // Paid through the First Consultation plan, so the session itself is ₹0 once that plan is running.
+      onPayFirstConsultation!({ ...booking, consultationFeeInr: 0 });
+      onClose();
+      return;
+    }
+    bookAppointment(booking);
     setIsSubmitted(true);
     setTimeout(() => {
       setIsSubmitted(false);
@@ -120,13 +142,13 @@ export const BookAppointmentModal: React.FC<BookAppointmentModalProps> = ({
               Your {consultationTier === 'first_consultation' ? 'First Consultation' : 'Follow-up Session'} with Dt. Anchal is booked for {date} at {timeSlot}.
             </p>
             <div className="inline-block px-3 py-1 bg-emerald-50 text-[#3E6553] font-bold text-xs rounded-full">
-              Consultation Fee: ₹{consultationFee}
+              {hasPlan ? 'Included in your plan' : `Consultation Fee: ₹${consultationFee}`}
             </div>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="p-5 overflow-y-auto space-y-4 text-xs">
             
-            {/* PRICING MODEL SELECTION (₹500 FIRST vs ₹300 FOLLOW-UP) */}
+            {/* PRICING MODEL SELECTION (FIRST CONSULTATION vs FOLLOW-UP) */}
             <div className="space-y-1.5">
               <label className="block font-semibold text-slate-800">
                 Consultation Type & Pricing
@@ -144,7 +166,7 @@ export const BookAppointmentModal: React.FC<BookAppointmentModalProps> = ({
                   <div className="flex items-center justify-between mb-1">
                     <span className="font-bold text-slate-900 text-xs">First Consultation</span>
                     <span className="px-2 py-0.5 rounded-full bg-emerald-800 text-white font-mono font-bold text-xs">
-                      ₹500
+                      {hasPlan ? 'Included' : `₹${FIRST_CONSULTATION_INR}`}
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-600 leading-snug">
@@ -164,7 +186,7 @@ export const BookAppointmentModal: React.FC<BookAppointmentModalProps> = ({
                   <div className="flex items-center justify-between mb-1">
                     <span className="font-bold text-slate-900 text-xs">Follow-up Session</span>
                     <span className="px-2 py-0.5 rounded-full bg-emerald-800 text-white font-mono font-bold text-xs">
-                      ₹300
+                      {hasPlan ? 'Included' : `₹${FOLLOW_UP_INR}`}
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-600 leading-snug">
@@ -300,14 +322,18 @@ export const BookAppointmentModal: React.FC<BookAppointmentModalProps> = ({
                   </span>
                 </div>
                 <p className="text-[10px] text-slate-500">
-                  No hidden charges · Includes follow-up diet chart review
+                  {hasPlan
+                    ? 'Included in your plan · nothing to pay'
+                    : payFirst
+                      ? `Paid online now · credited in full if you take a plan within ${firstConsultationPlan!.validityDays} days`
+                      : 'No hidden charges · Includes follow-up diet chart review'}
                 </p>
               </div>
               <div className="text-right">
                 <span className="text-base font-bold font-mono text-[#3E6553]">
                   ₹{consultationFee}
                 </span>
-                <span className="text-[10px] text-slate-400 block">per session</span>
+                <span className="text-[10px] text-slate-400 block">{hasPlan ? <s>₹{listFee}</s> : 'per session'}</span>
               </div>
             </div>
 
@@ -316,7 +342,9 @@ export const BookAppointmentModal: React.FC<BookAppointmentModalProps> = ({
               className="w-full py-3 rounded-xl bg-[#3E6553] hover:bg-[#325243] text-white font-medium text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
             >
               <Calendar className="w-4 h-4" />
-              <span>Confirm Booking (Payable: ₹{consultationFee})</span>
+              <span>
+                {hasPlan ? 'Confirm Booking (Included in your plan)' : payFirst ? `Continue to Pay ₹${consultationFee}` : `Confirm Booking (Payable: ₹${consultationFee})`}
+              </span>
             </button>
           </form>
         )}

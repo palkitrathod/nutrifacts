@@ -90,7 +90,7 @@ interface NutritionContextType {
     packageId: string,
     paymentMethod: PaymentMethodType,
     paymentDetails: string,
-    options?: { upgrade?: boolean; renew?: boolean }
+    options?: { upgrade?: boolean; renew?: boolean; goal?: string }
   ) => Promise<PackagePayment>;
   /** My Plans: switch to a cheaper (or same-price) plan when the current one ends. */
   schedulePlanChange: (pkg: NutritionPackage) => void;
@@ -590,7 +590,7 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     packageId: string,
     paymentMethod: PaymentMethodType,
     paymentDetails: string,
-    options: { upgrade?: boolean; renew?: boolean } = {}
+    options: { upgrade?: boolean; renew?: boolean; goal?: string } = {}
   ): Promise<PackagePayment> => {
     const pkg = packages.find((p) => p.id === packageId);
     if (!pkg) throw new Error('This plan is no longer available.');
@@ -617,6 +617,7 @@ export const NutritionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       amountInr: quote.amountDueInr,
       ...(upgradeFrom && { listPriceInr: pkg.priceInr, creditInr: quote.creditInr, upgradeFromPaymentId: upgradeFrom.id }),
       ...(renewalOf && { renewalOfPaymentId: renewalOf.id, bonusDays: RENEWAL_BONUS_DAYS }),
+      ...(options.goal && { goal: options.goal }),
       paymentMethod,
       paymentDetails,
       status: 'successful',

@@ -21,23 +21,28 @@ import {
   Wallet,
 } from 'lucide-react';
 import { useNutrition } from '../context/NutritionContext';
-import { NutritionPackage, PackagePayment } from '../types/nutrition';
+import { NutritionPackage, NutritionService, PackagePayment, ServiceGroup } from '../types/nutrition';
 import { addDays, canRenewEarly, daysLeft, EARLY_RENEWAL_WINDOW_DAYS, isPlanActive, planChange, RENEWAL_BONUS_DAYS, todayIso, upgradeQuote } from '../shared/plans';
-import { netAmount, REFUND_PROMISE_DAYS, suggestedRefund } from '../shared/pricing';
-import { PlanCard, WinWinStrip, planFamilies, sortPlans } from '../components/PlanCard';
+import { FIRST_CONSULTATION_INR, FOLLOW_UP_INR, netAmount, REFUND_PROMISE_DAYS, suggestedRefund } from '../shared/pricing';
+import { PlanCard, PlanComparison, WinWinStrip, planFamilies, sortPlans } from '../components/PlanCard';
+import { CLINICAL_DISCLAIMER, ServiceCard, ServiceDetailsDialog, ServiceGroupTabs, programPackage } from '../components/ServiceCatalog';
 
 interface PackagesScreenProps {
-  onSelectPackageToBuy: (pkg: NutritionPackage, options?: { upgrade?: boolean; renew?: boolean }) => void;
+  onSelectPackageToBuy: (pkg: NutritionPackage, options?: { upgrade?: boolean; renew?: boolean; goal?: string }) => void;
   onViewReceipt: (payment: PackagePayment) => void;
+  /** Medical programs are priced after an assessment: they start with booking the First Consultation. */
+  onBookConsultation?: (serviceTitle?: string) => void;
 }
 
 export const PackagesScreen: React.FC<PackagesScreenProps> = ({
   onSelectPackageToBuy,
   onViewReceipt,
+  onBookConsultation,
 }) => {
   const {
     currentUser,
     isDietitian,
+    services,
     packages,
     payments,
     appointments,
@@ -81,6 +86,11 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
   // The Starter Consultation counts in full (not just its unused days) towards a bigger plan.
   const currentCreditInFull = planRunning && packages.find((p) => p.id === activePlan.packageId)?.creditInFull === true;
   const visiblePlans = sortPlans(packages.filter((p) => p.isActive || isDietitian));
+  const corePlans = visiblePlans.filter((p) => !p.serviceId);
+  const programPlans = visiblePlans.filter((p) => p.serviceId);
+  const [goalChoice, setGoalChoice] = useState<Record<string, string>>({});
+  const [programGroup, setProgramGroup] = useState<ServiceGroup>('conditions');
+  const [openService, setOpenService] = useState<NutritionService | null>(null);
   // Plans offered in several lengths show one card with a 1 / 3 / 6-month choice. It starts on the
   // patient's current length, otherwise on 3 months (the better deal for most people).
   const [lengthChoice, setLengthChoice] = useState<Record<string, string>>({});
@@ -144,7 +154,8 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
     const used = appointments.filter(
       (a) => a.patientId === refundingPayment.patientId && a.status === 'completed' && a.date >= refundingPayment.createdAt
     );
-    const usedInr = used.reduce((sum, a) => sum + (a.consultationFeeInr || 0), 0);
+    // Valued at the standard rates, since sessions included in a plan are booked at ₹0.
+    const usedInr = used.reduce((sum, a) => sum + (a.consultationTier === 'first_consultation' ? FIRST_CONSULTATION_INR : FOLLOW_UP_INR), 0);
     const withinPromise = refundingPayment.createdAt >= addDays(today, -REFUND_PROMISE_DAYS);
     return { ...suggestedRefund(refundingPayment.amountInr, usedInr), usedCount: used.length, withinPromise };
   })();
@@ -161,6 +172,127 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
     if (!Number.isFinite(amount) || amount < 0 || amount > (refundingPayment?.amountInr ?? 0)) return;
     refundPayment(refundingPaymentId, refundReason, amount);
     setRefundingPaymentId(null);
+  };
+
+  /** A program card's button: the plan buttons for its chosen length, or booking the First Consultation. */
+  const programAction = (svc: NutritionService, months: number) => {
+    const pkg = programPackage(svc.id, months, packages);
+    if (pkg) return <div className="space-y-1.5 min-w-0">{planActions(pkg).footer}</div>;
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setOpenService(null);
+          onBookConsultation?.(svc.title);
+        }}
+        className="w-full py-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 shadow-xs transition-all bg-[#3E6553] hover:bg-[#2D4C3C] text-white"
+      >
+        <Calendar className="w-4 h-4" aria-hidden="true" /> Book first consultation
+      </button>
+    );
+  };
+
+  /** The button (and any credit line) for a plan or program, depending on the patient's current plan. */
+  const planActions = (pkg: NutritionPackage, goalLabel?: string): { footer: React.ReactNode; priceNote?: React.ReactNode } => {
+    // A plan with goals (Nutrition Care) is bought for one of them: the first unless the patient picked another.
+    const base = pkg.bundleOf ? packages.find((p) => p.id === pkg.bundleOf!.packageId) ?? pkg : pkg;
+    const goal = base.goals?.length ? goalLabel ?? base.goals[0].label : undefined;
+    const change = planChange(activePlan, pkg, today);
+    const isScheduled = scheduled?.packageId === pkg.id;
+    const quote = upgradeQuote(activePlan, pkg.priceInr, today, { inFull: currentCreditInFull });
+    // Early renewal is for ongoing care (plans and programs); one-time plans are simply bought again.
+    const renewable = canRenewEarly(activePlan, today) && (pkg.category === 'monthly_care' || !!pkg.serviceId);
+    const primary = 'w-full py-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 shadow-xs transition-all bg-[#3E6553] hover:bg-[#2D4C3C] text-white';
+    const secondary = 'w-full py-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 transition-all bg-white hover:bg-slate-50 text-slate-800 border border-slate-300';
+    const status = 'w-full py-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 text-center px-2';
+
+    let footer: React.ReactNode;
+    let priceNote: React.ReactNode;
+    if (isDietitian) {
+      footer = (
+        <>
+          <p className="flex items-center justify-between gap-2 text-[11px] text-slate-600 bg-slate-50 rounded-lg px-3 py-2">
+            <span className="flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5 text-[#3E6553]" aria-hidden="true" /> You receive</span>
+            <strong className="text-slate-900">₹{netAmount(pkg.priceInr).toLocaleString('en-IN')}</strong>
+          </p>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => handleStartEdit(pkg)} className="flex-1 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium text-xs flex items-center justify-center gap-1">
+              <Edit2 className="w-3.5 h-3.5" aria-hidden="true" /> <span>Edit Price</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => togglePackageActive(pkg.id)}
+              className={`px-3 py-2 rounded-xl text-xs font-medium transition-colors ${pkg.isActive ? 'bg-amber-100 text-amber-900 hover:bg-amber-200' : 'bg-emerald-100 text-emerald-900 hover:bg-emerald-200'}`}
+            >
+              {pkg.isActive ? 'Deactivate' : 'Activate'}
+            </button>
+          </div>
+          {!pkg.isActive && <p className="text-[11px] text-slate-500 text-center">Inactive · hidden from patients</p>}
+        </>
+      );
+    } else if (change === 'current') {
+      footer = renewable ? (
+        <>
+          <button type="button" onClick={() => onSelectPackageToBuy(pkg, { renew: true, goal })} className={primary}>
+            <CalendarPlus className="w-4 h-4" aria-hidden="true" />
+            <span>Renew early · get {RENEWAL_BONUS_DAYS} days free</span>
+          </button>
+          <p className="text-[11px] text-center text-emerald-800">Starts after {activePlan!.validUntil}, nothing is lost</p>
+        </>
+      ) : (
+        <>
+          <div className={`${status} bg-emerald-100 text-emerald-900 border border-emerald-200`}>
+            <CheckCircle2 className="w-4 h-4" aria-hidden="true" /> Your current plan
+          </div>
+          {(pkg.category === 'monthly_care' || !!pkg.serviceId) && (
+            <p className="text-[11px] text-center text-slate-500">
+              Early renewal (+{RENEWAL_BONUS_DAYS} days free) opens on {addDays(activePlan!.validUntil, 1 - EARLY_RENEWAL_WINDOW_DAYS)}
+            </p>
+          )}
+        </>
+      );
+    } else if (change === 'upgrade') {
+      if (quote.creditInr > 0) {
+        priceNote = (
+          <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-800">
+            <Gift className="w-3.5 h-3.5" aria-hidden="true" />
+            Pay ₹{quote.amountDueInr.toLocaleString('en-IN')} today after ₹{quote.creditInr.toLocaleString('en-IN')} credit
+          </span>
+        );
+      }
+      footer = (
+        <button type="button" onClick={() => onSelectPackageToBuy(pkg, { upgrade: true, goal })} className={primary}>
+          <TrendingUp className="w-4 h-4" aria-hidden="true" />
+          <span>Upgrade · pay ₹{quote.amountDueInr.toLocaleString('en-IN')}</span>
+        </button>
+      );
+    } else if (change === 'downgrade' || change === 'switch') {
+      footer = isScheduled ? (
+        renewable ? (
+          <button type="button" onClick={() => onSelectPackageToBuy(pkg, { renew: true, goal })} className={primary}>
+            <CalendarPlus className="w-4 h-4" aria-hidden="true" />
+            <span>Confirm now · get {RENEWAL_BONUS_DAYS} days free</span>
+          </button>
+        ) : (
+          <div className={`${status} bg-slate-100 text-slate-700 border border-slate-200`}>
+            <Calendar className="w-4 h-4 shrink-0" aria-hidden="true" /> Starts {scheduled!.effectiveDate}
+          </div>
+        )
+      ) : (
+        <button type="button" onClick={() => setConfirmingChange(pkg)} className={secondary}>
+          <RotateCcw className="w-4 h-4" aria-hidden="true" />
+          <span>{change === 'downgrade' ? 'Switch to this when my plan ends' : 'Switch when my plan ends'}</span>
+        </button>
+      );
+    } else {
+      footer = (
+        <button type="button" onClick={() => onSelectPackageToBuy(pkg, { goal })} className={pkg.isPopular || pkg.isBestValue || isScheduled ? primary : secondary}>
+          <CreditCard className="w-4 h-4" aria-hidden="true" />
+          <span>{isScheduled ? 'Start your next plan' : activePlan?.packageId === pkg.id ? 'Renew this plan' : 'Choose this plan'}</span>
+        </button>
+      );
+    }
+    return { footer, priceNote };
   };
 
   return (
@@ -330,111 +462,19 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 pt-3">
-            {planFamilies(visiblePlans).map((family) => {
+            {planFamilies(corePlans).map((family) => {
               const pkg = chosenLength(family);
-              const change = planChange(activePlan, pkg, today);
-              const isScheduled = scheduled?.packageId === pkg.id;
-              const quote = upgradeQuote(activePlan, pkg.priceInr, today, { inFull: currentCreditInFull });
-              // Early renewal is for ongoing care; one-time plans are simply bought again.
-              const renewable = canRenewEarly(activePlan, today) && pkg.category === 'monthly_care';
-              const primary = 'w-full py-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 shadow-xs transition-all bg-[#3E6553] hover:bg-[#2D4C3C] text-white';
-              const secondary = 'w-full py-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 transition-all bg-white hover:bg-slate-50 text-slate-800 border border-slate-300';
-              const status = 'w-full py-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 text-center px-2';
-
-              let footer: React.ReactNode;
-              let priceNote: React.ReactNode;
-              if (isDietitian) {
-                footer = (
-                  <>
-                    <p className="flex items-center justify-between gap-2 text-[11px] text-slate-600 bg-slate-50 rounded-lg px-3 py-2">
-                      <span className="flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5 text-[#3E6553]" aria-hidden="true" /> You receive</span>
-                      <strong className="text-slate-900">₹{netAmount(pkg.priceInr).toLocaleString('en-IN')}</strong>
-                    </p>
-                    <div className="flex gap-2">
-                      <button type="button" onClick={() => handleStartEdit(pkg)} className="flex-1 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium text-xs flex items-center justify-center gap-1">
-                        <Edit2 className="w-3.5 h-3.5" aria-hidden="true" /> <span>Edit Price</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => togglePackageActive(pkg.id)}
-                        className={`px-3 py-2 rounded-xl text-xs font-medium transition-colors ${pkg.isActive ? 'bg-amber-100 text-amber-900 hover:bg-amber-200' : 'bg-emerald-100 text-emerald-900 hover:bg-emerald-200'}`}
-                      >
-                        {pkg.isActive ? 'Deactivate' : 'Activate'}
-                      </button>
-                    </div>
-                    {!pkg.isActive && <p className="text-[11px] text-slate-500 text-center">Inactive · hidden from patients</p>}
-                  </>
-                );
-              } else if (change === 'current') {
-                footer = renewable ? (
-                  <>
-                    <button type="button" onClick={() => onSelectPackageToBuy(pkg, { renew: true })} className={primary}>
-                      <CalendarPlus className="w-4 h-4" aria-hidden="true" />
-                      <span>Renew early · get {RENEWAL_BONUS_DAYS} days free</span>
-                    </button>
-                    <p className="text-[11px] text-center text-emerald-800">Starts after {activePlan!.validUntil}, nothing is lost</p>
-                  </>
-                ) : (
-                  <>
-                    <div className={`${status} bg-emerald-100 text-emerald-900 border border-emerald-200`}>
-                      <CheckCircle2 className="w-4 h-4" aria-hidden="true" /> Your current plan
-                    </div>
-                    {pkg.category === 'monthly_care' && (
-                      <p className="text-[11px] text-center text-slate-500">
-                        Early renewal (+{RENEWAL_BONUS_DAYS} days free) opens on {addDays(activePlan!.validUntil, 1 - EARLY_RENEWAL_WINDOW_DAYS)}
-                      </p>
-                    )}
-                  </>
-                );
-              } else if (change === 'upgrade') {
-                if (quote.creditInr > 0) {
-                  priceNote = (
-                    <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-800">
-                      <Gift className="w-3.5 h-3.5" aria-hidden="true" />
-                      Pay ₹{quote.amountDueInr.toLocaleString('en-IN')} today after ₹{quote.creditInr.toLocaleString('en-IN')} credit
-                    </span>
-                  );
-                }
-                footer = (
-                  <button type="button" onClick={() => onSelectPackageToBuy(pkg, { upgrade: true })} className={primary}>
-                    <TrendingUp className="w-4 h-4" aria-hidden="true" />
-                    <span>Upgrade · pay ₹{quote.amountDueInr.toLocaleString('en-IN')}</span>
-                  </button>
-                );
-              } else if (change === 'downgrade' || change === 'switch') {
-                footer = isScheduled ? (
-                  renewable ? (
-                    <button type="button" onClick={() => onSelectPackageToBuy(pkg, { renew: true })} className={primary}>
-                      <CalendarPlus className="w-4 h-4" aria-hidden="true" />
-                      <span>Confirm now · get {RENEWAL_BONUS_DAYS} days free</span>
-                    </button>
-                  ) : (
-                    <div className={`${status} bg-slate-100 text-slate-700 border border-slate-200`}>
-                      <Calendar className="w-4 h-4 shrink-0" aria-hidden="true" /> Starts {scheduled!.effectiveDate}
-                    </div>
-                  )
-                ) : (
-                  <button type="button" onClick={() => setConfirmingChange(pkg)} className={secondary}>
-                    <RotateCcw className="w-4 h-4" aria-hidden="true" />
-                    <span>{change === 'downgrade' ? 'Switch to this when my plan ends' : 'Switch when my plan ends'}</span>
-                  </button>
-                );
-              } else {
-                footer = (
-                  <button type="button" onClick={() => onSelectPackageToBuy(pkg)} className={pkg.isPopular || pkg.isBestValue || isScheduled ? primary : secondary}>
-                    <CreditCard className="w-4 h-4" aria-hidden="true" />
-                    <span>{isScheduled ? 'Start your next plan' : activePlan?.packageId === pkg.id ? 'Renew this plan' : 'Choose this plan'}</span>
-                  </button>
-                );
-              }
+              const { footer, priceNote } = planActions(pkg, goalChoice[family[0].id]);
 
               return (
                 <PlanCard
                   key={family[0].id}
                   pkg={pkg}
-                  all={visiblePlans}
+                  all={corePlans}
                   family={family}
                   onSelectLength={(p) => setLengthChoice((c) => ({ ...c, [family[0].id]: p.id }))}
+                  goal={goalChoice[family[0].id]}
+                  onSelectGoal={(g) => setGoalChoice((c) => ({ ...c, [family[0].id]: g }))}
                   footer={footer}
                   priceNote={priceNote}
                   showTerms
@@ -443,6 +483,61 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
               );
             })}
           </div>
+
+          {!isDietitian && <PlanComparison plans={corePlans} />}
+
+          {programPlans.length > 0 && (
+            <section aria-labelledby="programs-heading" className="space-y-3 pt-4">
+              <div>
+                <h2 id="programs-heading" className="text-base font-bold text-slate-900 tracking-tight">Condition Programs</h2>
+                <p className="text-xs text-slate-500">
+                  {isDietitian
+                    ? 'Prices patients pay online for each program and length.'
+                    : 'Diet care for a health condition, with consultations included. Pay online, or start with a First Consultation.'}
+                </p>
+              </div>
+              {isDietitian ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {planFamilies(programPlans).map((family) => {
+                    const pkg = chosenLength(family);
+                    return (
+                      <PlanCard
+                        key={family[0].id}
+                        pkg={pkg}
+                        all={programPlans}
+                        family={family}
+                        onSelectLength={(p) => setLengthChoice((c) => ({ ...c, [family[0].id]: p.id }))}
+                        footer={planActions(pkg).footer}
+                        className={!pkg.isActive ? 'opacity-70' : ''}
+                      />
+                    );
+                  })}
+                </div>
+              ) : (
+                <>
+                  <ServiceGroupTabs value={programGroup} onChange={setProgramGroup} services={services} />
+                  <div id={`programs-${programGroup}`} role="tabpanel" aria-labelledby={`programs-tab-${programGroup}`} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {services
+                      .filter((svc) => svc.group === programGroup)
+                      .map((svc) => (
+                        <ServiceCard
+                          key={svc.id}
+                          svc={svc}
+                          packages={packages}
+                          onDetails={() => setOpenService(svc)}
+                          action={(months) => programAction(svc, months)}
+                          note={(months) => {
+                            const pkg = programPackage(svc.id, months, packages);
+                            return pkg ? planActions(pkg).priceNote : null;
+                          }}
+                        />
+                      ))}
+                  </div>
+                  <p className="text-[11px] text-slate-500">{CLINICAL_DISCLAIMER}</p>
+                </>
+              )}
+            </section>
+          )}
 
           {/* Payment Guarantee Notice */}
           <div className="p-4 rounded-2xl bg-[#FAFBF9] border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
@@ -457,6 +552,10 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
             </span>
           </div>
         </div>
+      )}
+
+      {openService && (
+        <ServiceDetailsDialog svc={openService} packages={packages} onClose={() => setOpenService(null)} action={programAction(openService, 1)} />
       )}
 
       {confirmingChange && activePlan && (
@@ -527,6 +626,7 @@ export const PackagesScreen: React.FC<PackagesScreenProps> = ({
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-slate-900 text-sm">{pay.packageTitle}</span>
+                      {pay.goal && <span className="text-[11px] font-semibold text-emerald-800">· Goal: {pay.goal}</span>}
                       <span className="text-slate-300">·</span>
                       <span className="font-mono font-bold text-emerald-800">₹{pay.amountInr}</span>
                       <span

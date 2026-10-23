@@ -14,20 +14,18 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import type { NutritionService, ServiceGroup } from '../types/nutrition';
+import type { NutritionPackage, NutritionService, ServiceGroup } from '../types/nutrition';
 import { ServiceIcon, serviceTheme } from './ServiceIcon';
 import { bundleSavings } from '../shared/plans';
 import { useEscapeToClose } from './useEscapeToClose';
+import { FIRST_CONSULTATION_INR, FOLLOW_UP_INR } from '../shared/pricing';
 
 const inr = (n: number) => `₹${n.toLocaleString('en-IN')}`;
 
-/** Consultation fees when booked one by one (first ₹500, follow-ups ₹300). */
-export const FIRST_CONSULT_INR = 500;
-export const FOLLOW_UP_INR = 300;
-export const consultationsValue = (n: number) => (n > 0 ? FIRST_CONSULT_INR + (n - 1) * FOLLOW_UP_INR : 0);
+/** Value of n consultations if booked one by one (first consultation, then follow-ups). */
+export const consultationsValue = (n: number) => (n > 0 ? FIRST_CONSULTATION_INR + (n - 1) * FOLLOW_UP_INR : 0);
 
 export const SERVICE_GROUPS: Array<{ id: ServiceGroup; label: string; icon: LucideIcon; blurb: string }> = [
-  { id: 'everyday', label: 'Everyday Wellness', icon: Sprout, blurb: 'Habits, weight and women’s health' },
   { id: 'conditions', label: 'Lifestyle Conditions', icon: HeartPulse, blurb: 'Diabetes, BP, thyroid, PCOS, heart, iron' },
   { id: 'specialised', label: 'Specialised Care', icon: Stethoscope, blurb: 'Liver, gut, kidney, neuro, children, recovery' },
   { id: 'medical', label: 'Medical Nutrition Support', icon: ShieldPlus, blurb: 'Cancer care, pancreas, tube feeding' },
@@ -52,14 +50,24 @@ export interface ProgramLength {
   consultations?: number;
 }
 
-/** The lengths a program can be taken for (1 / 3 / 6 months), each with what it saves. */
-export function programLengths(svc: NutritionService): ProgramLength[] {
-  if (!svc.priceInr) return [];
-  const base = svc.priceInr;
+/** The purchasable plan for a program at a given length, from the live price list. */
+export function programPackage(svcId: string, months: number, packages: NutritionPackage[] | undefined) {
+  return packages?.find((p) => p.serviceId === svcId && (p.bundleOf?.months ?? 1) === months && p.isActive);
+}
+
+/**
+ * The lengths a program can be taken for (1 / 3 / 6 months), each with what it saves. Prices come from
+ * the live price list when given (what checkout charges), otherwise from the catalogue.
+ */
+export function programLengths(svc: NutritionService, packages?: NutritionPackage[]): ProgramLength[] {
+  const live = (months: number, fallback: number | undefined) =>
+    packages ? programPackage(svc.id, months, packages)?.priceInr : fallback;
+  const base = live(1, svc.priceInr);
+  if (!base || svc.assessmentFirst) return [];
   const lengths: ProgramLength[] = [{ months: 1, priceInr: base, perMonthInr: base, savingInr: 0, pct: 0, consultations: svc.consultations }];
   for (const [months, price] of [
-    [3, svc.quarterlyPriceInr],
-    [6, svc.halfYearlyPriceInr],
+    [3, live(3, svc.quarterlyPriceInr)],
+    [6, live(6, svc.halfYearlyPriceInr)],
   ] as const) {
     if (!price) continue;
     const { perMonthInr, savingInr } = bundleSavings(price, base, months);
@@ -107,11 +115,15 @@ export const ServiceGroupTabs: React.FC<{
 export const ServiceCard: React.FC<{
   svc: NutritionService;
   onDetails: () => void;
-  /** The booking button; told which length the visitor picked. */
+  /** The main button; told which length the visitor picked. */
   action: React.ReactNode | ((months: number) => React.ReactNode);
-}> = ({ svc, onDetails, action }) => {
+  /** Live price list (prices shown = prices charged). */
+  packages?: NutritionPackage[];
+  /** Extra line under the price for the chosen length (e.g. a credit). */
+  note?: (months: number) => React.ReactNode;
+}> = ({ svc, onDetails, action, packages, note }) => {
   const theme = serviceTheme(svc.iconName);
-  const lengths = programLengths(svc);
+  const lengths = programLengths(svc, packages);
   // Starts on 3 months where offered: the better deal for most people.
   const [months, setMonths] = useState(lengths.some((l) => l.months === 3) ? 3 : 1);
   const chosen = lengths.find((l) => l.months === months) ?? lengths[0];
@@ -131,7 +143,8 @@ export const ServiceCard: React.FC<{
       <p className="text-slate-500 text-xs leading-relaxed mt-3 flex-1">{svc.tagline}</p>
 
       <div className="mt-4 pt-3 border-t border-slate-100 space-y-2">
-        {svc.assessmentFirst ? (
+        {/* No online price: assessment-first programs, or one the clinic has switched off for now. */}
+        {!chosen ? (
           <p className="flex items-start gap-2 text-xs text-slate-700">
             <ClipboardCheck className="w-4 h-4 text-[#3E6553] shrink-0 mt-px" aria-hidden="true" />
             <span>
@@ -181,6 +194,7 @@ export const ServiceCard: React.FC<{
                 </button>
               )
             )}
+            {note?.(chosen.months)}
             {!!chosen.consultations && (
               <p className="flex items-start gap-1.5 text-[11px] text-slate-600">
                 <Users className="w-3.5 h-3.5 text-[#3E6553] shrink-0 mt-px" aria-hidden="true" />
@@ -209,10 +223,15 @@ export const ServiceCard: React.FC<{
 };
 
 /** Full details of a program, in a pop-up. */
-export const ServiceDetailsDialog: React.FC<{ svc: NutritionService; onClose: () => void; action: React.ReactNode }> = ({ svc, onClose, action }) => {
+export const ServiceDetailsDialog: React.FC<{ svc: NutritionService; onClose: () => void; action: React.ReactNode; packages?: NutritionPackage[] }> = ({
+  svc,
+  onClose,
+  action,
+  packages,
+}) => {
   useEscapeToClose(true, onClose);
   const theme = serviceTheme(svc.iconName);
-  const lengths = programLengths(svc);
+  const lengths = programLengths(svc, packages);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs" onClick={onClose}>
       <div
@@ -270,9 +289,9 @@ export const ServiceDetailsDialog: React.FC<{ svc: NutritionService; onClose: ()
           </section>
 
           <section className="rounded-xl border border-slate-200 p-3 space-y-1.5">
-            {svc.assessmentFirst ? (
+            {lengths.length === 0 ? (
               <p className="text-slate-700">
-                <strong>Price:</strong> a personalised plan and quote after your first assessment (₹500).
+                <strong>Price:</strong> a written, personalised quote after your First Consultation (₹{FIRST_CONSULTATION_INR}), before you pay anything more.
               </p>
             ) : (
               <>

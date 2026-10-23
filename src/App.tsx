@@ -19,7 +19,7 @@ import { WhatsAppButton } from './components/WhatsAppButton';
 import { AccountModal } from './components/AccountModal';
 import { NotificationModal } from './components/NotificationModal';
 import { PdfDietChartModal } from './components/PdfDietChartModal';
-import { BookAppointmentModal } from './components/BookAppointmentModal';
+import { BookAppointmentModal, BookingRequest } from './components/BookAppointmentModal';
 
 import { HomeScreen } from './screens/HomeScreen';
 import { DietChartScreen } from './screens/DietChartScreen';
@@ -46,7 +46,7 @@ interface AppEntryState {
 
 // ── Signed-in app shell ────────────────────────────────────────────────────
 function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<void>; entry: AppEntryState | null }) {
-  const { currentUser, isDietitian, patients, getCurrentUserDietChart, getActivePackage, syncError, dismissSyncError } = useNutrition();
+  const { currentUser, isDietitian, patients, packages, getCurrentUserDietChart, getActivePackage, bookAppointment, syncError, dismissSyncError } = useNutrition();
 
   const [activeTab, setActiveTab] = useState<string>(entry?.openTab ?? 'home');
   // "My profile" in the account panel opens the Profile tab with its edit form showing (only that once).
@@ -61,8 +61,10 @@ function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<vo
   const [bookServicePreset, setBookServicePreset] = useState<string | undefined>(entry?.bookService);
 
   // Payment states
-  const [checkout, setCheckout] = useState<{ pkg: NutritionPackage; upgrade: boolean; renew: boolean } | null>(null);
+  const [checkout, setCheckout] = useState<{ pkg: NutritionPackage; upgrade: boolean; renew: boolean; goal?: string } | null>(null);
   const [viewingReceipt, setViewingReceipt] = useState<PackagePayment | null>(null);
+  // A First Consultation waiting for its ₹499 payment; booked when the payment succeeds.
+  const [pendingBooking, setPendingBooking] = useState<BookingRequest | null>(null);
 
   const currentChart = getCurrentUserDietChart();
 
@@ -75,17 +77,26 @@ function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<vo
     setIsPdfModalOpen(true);
   };
 
-  const handleSelectPackageToBuy = (pkg: NutritionPackage, options: { upgrade?: boolean; renew?: boolean } = {}) => {
-    setCheckout({ pkg, upgrade: !!options.upgrade, renew: !!options.renew });
+  const handleSelectPackageToBuy = (pkg: NutritionPackage, options: { upgrade?: boolean; renew?: boolean; goal?: string } = {}) => {
+    setCheckout({ pkg, upgrade: !!options.upgrade, renew: !!options.renew, goal: options.goal });
   };
 
   // Buying from Home while a plan is running would skip the upgrade credit / scheduled downgrade: use My Plans.
-  const handleBuyFromHome = (pkg: NutritionPackage) => {
+  const handleBuyFromHome = (pkg: NutritionPackage, goal?: string) => {
     if (isPlanActive(getActivePackage(currentUser.id))) setActiveTab('plans');
-    else handleSelectPackageToBuy(pkg);
+    else handleSelectPackageToBuy(pkg, { goal });
+  };
+
+  const handlePayFirstConsultation = (booking: BookingRequest) => {
+    const pkg = packages.find((p) => p.id === 'pkg-basic-consultation');
+    if (!pkg) return;
+    setPendingBooking(booking);
+    handleSelectPackageToBuy(pkg);
   };
 
   const handlePaymentSuccess = (payment: PackagePayment) => {
+    if (pendingBooking && payment.packageId === 'pkg-basic-consultation') bookAppointment(pendingBooking);
+    setPendingBooking(null);
     setCheckout(null);
     setViewingReceipt(payment);
   };
@@ -118,6 +129,7 @@ function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<vo
         {activeTab === 'plans' && (
           <PackagesScreen
             onSelectPackageToBuy={handleSelectPackageToBuy}
+            onBookConsultation={handleOpenBookModal}
             onViewReceipt={(payment) => setViewingReceipt(payment)}
           />
         )}
@@ -188,6 +200,7 @@ function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<vo
         isOpen={isBookModalOpen}
         onClose={() => setIsBookModalOpen(false)}
         preselectedService={bookServicePreset}
+        onPayFirstConsultation={handlePayFirstConsultation}
       />
 
       {/* Checkout Payment Modal */}
@@ -196,8 +209,12 @@ function NutritionAppContent({ onSignOut, entry }: { onSignOut: () => Promise<vo
           packageItem={checkout.pkg}
           upgrade={checkout.upgrade}
           renew={checkout.renew}
+          goal={checkout.goal}
           isOpen
-          onClose={() => setCheckout(null)}
+          onClose={() => {
+            setCheckout(null);
+            setPendingBooking(null);
+          }}
           onSuccess={handlePaymentSuccess}
         />
       )}

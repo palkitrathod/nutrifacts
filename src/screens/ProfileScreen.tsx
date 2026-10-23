@@ -46,6 +46,7 @@ import {
   type User as PatientRecord,
 } from '../types/nutrition';
 import { DIETITIAN_PROFILE, CLINICAL_CONDITIONS_DATA } from '../data/mockData';
+import { FIRST_CONSULTATION_INR, FOLLOW_UP_INR } from '../shared/pricing';
 
 interface ProfileScreenProps {
   onNavigateTab: (tab: string) => void;
@@ -175,7 +176,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     const firstConsultations = appointments.filter((a) => a.consultationTier === 'first_consultation');
     const followUpConsultations = appointments.filter((a) => a.consultationTier === 'follow_up');
     const totalConsultationRevenue =
-      firstConsultations.length * 500 + followUpConsultations.length * 300;
+      [...firstConsultations, ...followUpConsultations].reduce((sum, a) => sum + (a.consultationFeeInr ?? 0), 0);
 
     return (
       <div className="flex-1 pb-16 space-y-5 px-4 pt-4 md:px-8 md:pt-6 max-w-5xl xl:max-w-6xl 2xl:max-w-7xl mx-auto w-full">
@@ -756,7 +757,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           </div>
         )}
 
-        {/* TAB 4: CONSULTATIONS & SCHEDULE (₹500 / ₹300 PRICING MODEL) */}
+        {/* TAB 4: CONSULTATIONS & SCHEDULE */}
         {adminTab === 'consultations' && (
           <div className="space-y-4">
             <div className="bg-white rounded-2xl md:rounded-3xl border border-slate-200 p-5 shadow-2xs space-y-3">
@@ -766,7 +767,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     Consultation & Follow-up Schedule
                   </h2>
                   <p className="text-xs text-slate-500">
-                    Track patient intake appointments (₹500) and follow-up sessions (₹300)
+                    Track first consultations (₹{FIRST_CONSULTATION_INR}) and follow-up sessions (₹{FOLLOW_UP_INR}); sessions included in a plan are ₹0
                   </p>
                 </div>
 
@@ -814,7 +815,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs divide-y divide-slate-100 text-xs">
               {appointments.map((appt) => {
                 const isFirst = appt.consultationTier === 'first_consultation';
-                const fee = appt.consultationFeeInr || (isFirst ? 500 : 300);
+                const fee = appt.consultationFeeInr ?? (isFirst ? FIRST_CONSULTATION_INR : FOLLOW_UP_INR);
 
                 return (
                   <div

@@ -355,91 +355,14 @@ export const INITIAL_WEIGHT_RECORDS: WeightRecord[] = [
   { id: 'wr4', patientId: 'patient-rohan', date: '2026-10-14', weightKg: 81.3, waistCm: 91.5, energyLevel: 4, notes: 'Energy sustained throughout corporate workday.' },
 ];
 
-// The clinic's 15 nutrition programs (from "nutrfacts with anchal" program brief), in 4 categories.
+// The clinic's condition programs (from the "nutrfacts with anchal" program brief), in 3 categories.
+// (Lifestyle Reset, Weight Management and Women's Wellness from the brief are goals of Nutrition Care.)
 // Prices: 1 month as in the brief; 3 months ≈ 2.4 × monthly (about 20% saving) on ongoing-care programs.
 // Oncology, Pancreatic and Enteral/Parenteral support are priced after an assessment.
 const inr = (n: number) => `₹${n.toLocaleString('en-IN')}`;
 const monthly = (price: number) => `${inr(price)} / 30 days`;
 
 export const NUTRITION_SERVICES: NutritionService[] = [
-  // ── Everyday Wellness ─────────────────────────────────────────────────────
-  {
-    id: 'service-lifestyle-reset',
-    group: 'everyday',
-    title: 'Lifestyle Reset',
-    subtitle: 'Better habits & a steady routine',
-    tagline: 'A structured program to improve everyday eating habits, build a consistent routine and make practical lifestyle changes.',
-    iconName: 'Sunrise',
-    duration: '30 days · 2 consultations',
-    priceInr: 2499,
-    consultations: 2,
-    quarterlyPriceInr: 5999,
-    halfYearlyPriceInr: 10999,
-    priceDisplay: monthly(2499),
-    idealFor: ['Busy professionals with irregular meals', 'Anyone wanting healthier everyday habits', 'People who eat out often'],
-    whatIsIncluded: [
-      'Lifestyle and activity assessment',
-      'Personalised meal guidance using suitable everyday foods',
-      'Portion-size guidance and balanced-meal education',
-      'Healthy snack guide and smart-snacking suggestions',
-      'Eating-out options for restaurants, cafés and social occasions',
-      'Suitable food alternatives and substitutions',
-      'Weekly progress check-ins and diet modifications',
-      'WhatsApp support (clinic hours)',
-    ],
-    dietaryPhilosophy: 'Practical changes that fit real life: home meals, eating out and simple swaps, without promising instant results.',
-  },
-  {
-    id: 'service-weight-mgmt',
-    group: 'everyday',
-    title: 'Weight Management',
-    subtitle: 'Weight loss, gain or maintenance',
-    tagline: 'Nutrition guidance for your weight goal (loss, gain, muscle or maintenance), based on assessment and suitability.',
-    iconName: 'Weight',
-    duration: '30 days · 2 consultations',
-    priceInr: 2499,
-    consultations: 2,
-    quarterlyPriceInr: 5999,
-    halfYearlyPriceInr: 10999,
-    priceDisplay: monthly(2499),
-    idealFor: ['Healthy weight loss without crash diets', 'Healthy weight or muscle gain', 'Keeping weight steady after a program'],
-    whatIsIncluded: [
-      'Assessment of food habits, routine and lifestyle factors',
-      'Personalised meal planning and portion guidance',
-      'Alternatives and substitutions for commonly eaten foods',
-      'Eating-out guidance and practical ordering options',
-      'Habit tracker to support consistency',
-      'Progress analysis during scheduled reviews',
-      'Strategies for common challenges and changing routines',
-      'Personalised maintenance strategy after the program',
-    ],
-    dietaryPhilosophy: 'Sustainable progress through realistic habits, not starvation or eliminating the foods you love.',
-  },
-  {
-    id: 'service-womens-wellness',
-    group: 'everyday',
-    title: "Women's Wellness",
-    subtitle: 'Nutrition for every life stage',
-    tagline: "Personalised nutrition support for women's general wellbeing and changing nutritional needs.",
-    iconName: 'Venus',
-    duration: '30 days · 2 consultations',
-    priceInr: 2499,
-    consultations: 2,
-    quarterlyPriceInr: 5999,
-    halfYearlyPriceInr: 10999,
-    priceDisplay: monthly(2499),
-    idealFor: ['Energy, iron and bone health', 'Pregnancy planning and post-pregnancy', 'Menopause and changing needs'],
-    whatIsIncluded: [
-      'Personalised dietary and lifestyle assessment',
-      'Balanced meal planning around your routine and preferences',
-      'Protein and micronutrient guidance',
-      'Food-based iron, calcium and vitamin D education',
-      'Practical food alternatives and meal substitutions',
-      'Lifestyle and weight-management guidance',
-    ],
-    dietaryPhilosophy: 'Food-first support for how your body and needs change over time.',
-  },
-
   // ── Lifestyle Conditions ──────────────────────────────────────────────────
   {
     id: 'service-lifestyle-diseases',
@@ -836,7 +759,7 @@ export const INITIAL_DAILY_TRACKER: Record<string, DailyTracker> = {
 };
 
 /** Bump when the clinic's own plan descriptions change, so existing databases pick them up (prices are kept). */
-export const CATALOG_VERSION = 4;
+export const CATALOG_VERSION = 7;
 
 const PROMISE = '7-day promise: if it isn’t right for you, get a refund minus consultations already used and payment processing charges. No automatic renewal.';
 
@@ -845,12 +768,12 @@ const PROMISE = '7-day promise: if it isn’t right for you, get a refund minus 
 export const INITIAL_PACKAGES: NutritionPackage[] = [
   {
     id: 'pkg-basic-consultation',
-    title: 'Starter Consultation',
+    title: 'First Consultation',
     priceInr: 499,
     durationLabel: 'One-time · first step',
     validityDays: 14,
     isActive: true,
-    tagline: 'Meet Dt. Anchal, get clarity and a plan for your first 3 days.',
+    tagline: 'Your first session with Dt. Anchal: clarity, priorities and a plan for your first 3 days.',
     description: 'A focused first session to understand your goals, routine, food habits and reports, so you leave with clear next steps.',
     inclusions: [
       '30-minute video or in-clinic consultation with Dt. Anchal',
@@ -861,6 +784,18 @@ export const INITIAL_PACKAGES: NutritionPackage[] = [
     notIncluded: ['Ongoing follow-ups or WhatsApp support'],
     terms: `Valid for 14 days. Fully credited if you continue with any bigger plan within 14 days. ${PROMISE}`,
     category: 'consultation',
+    step: 'Step 1 · Try',
+    bestFor: 'You want expert advice before committing to a plan',
+    stats: [
+      { value: '30 min', label: 'one-to-one with Dt. Anchal' },
+      { value: '3-day', label: 'starter meal plan' },
+      { value: '100%', label: 'credited if you continue in 14 days' },
+    ],
+    journey: [
+      'Pick a time that suits you',
+      '30 minutes with Dt. Anchal, by video or in the clinic',
+      'Get your 3-day starter plan and written next steps',
+    ],
     sortOrder: 1,
     creditInFull: true,
     catalogVersion: CATALOG_VERSION,
@@ -885,6 +820,18 @@ export const INITIAL_PACKAGES: NutritionPackage[] = [
     notIncluded: ['Weekly plan updates (included in Monthly Nutrition Care)'],
     terms: `Plan shared within 24–48 hours of your consultation. Upgrade any time: unused days are credited. ${PROMISE}`,
     category: 'diet_plan',
+    step: 'Step 2 · Plan',
+    bestFor: 'You want an expert plan and the freedom to follow it yourself',
+    stats: [
+      { value: '7-day', label: 'rotating meal plan' },
+      { value: '1', label: 'review call + plan revision' },
+      { value: '7 days', label: 'WhatsApp questions' },
+    ],
+    journey: [
+      'Consultation and dietary assessment',
+      'Your 7-day plan, shared within 24–48 hours',
+      'Review call in week 2 to fine-tune it',
+    ],
     sortOrder: 2,
     catalogVersion: CATALOG_VERSION,
   },
@@ -909,8 +856,47 @@ export const INITIAL_PACKAGES: NutritionPackage[] = [
     notIncluded: ['Round-the-clock (24/7) chat', 'Medicines or supplements'],
     terms: `Renew in your last 7 days and get 7 extra days free. ${PROMISE}`,
     category: 'monthly_care',
+    step: 'Step 3 · Transform',
+    bestFor: 'You want weekly guidance until new habits stick',
+    stats: [
+      { value: '4', label: 'sessions with Dt. Anchal' },
+      { value: 'Weekly', label: 'meal plan updates' },
+      { value: '10–7', label: 'WhatsApp support, daily' },
+    ],
     sortOrder: 3,
     familyTitle: 'Nutrition Care',
+    goals: [
+      {
+        id: 'habits',
+        label: 'Better habits',
+        iconName: 'Sunrise',
+        highlights: [
+          'Lifestyle and activity assessment',
+          'Healthy snack guide and smart-snacking suggestions',
+          'Eating-out choices for restaurants, cafés and social occasions',
+        ],
+      },
+      {
+        id: 'weight',
+        label: 'Weight goal',
+        iconName: 'Weight',
+        highlights: [
+          'Weight loss, gain, muscle or maintenance, based on your assessment',
+          'Habit tracker to support consistency',
+          'Personalised maintenance strategy after the program',
+        ],
+      },
+      {
+        id: 'womens-wellness',
+        label: "Women's wellness",
+        iconName: 'Venus',
+        highlights: [
+          'Protein and micronutrient guidance',
+          'Food-based iron, calcium and vitamin D education',
+          'Support for changing needs at every life stage',
+        ],
+      },
+    ],
     catalogVersion: CATALOG_VERSION,
   },
   {
@@ -933,6 +919,11 @@ export const INITIAL_PACKAGES: NutritionPackage[] = [
     notIncluded: ['Round-the-clock (24/7) chat', 'Medicines or supplements'],
     terms: `Renew in your last 7 days and get 7 extra days free. ${PROMISE}`,
     category: 'monthly_care',
+    stats: [
+      { value: '12', label: 'sessions with Dt. Anchal' },
+      { value: 'Weekly', label: 'meal plan updates' },
+      { value: '10–7', label: 'WhatsApp support, daily' },
+    ],
     sortOrder: 4,
     bundleOf: { packageId: 'pkg-monthly-nutrition-care', months: 3 },
     catalogVersion: CATALOG_VERSION,
@@ -957,11 +948,56 @@ export const INITIAL_PACKAGES: NutritionPackage[] = [
     notIncluded: ['Round-the-clock (24/7) chat', 'Medicines or supplements'],
     terms: `Renew in your last 7 days and get 7 extra days free. ${PROMISE}`,
     category: 'monthly_care',
+    stats: [
+      { value: '24', label: 'sessions with Dt. Anchal' },
+      { value: 'Weekly', label: 'meal plan updates' },
+      { value: '10–7', label: 'WhatsApp support, daily' },
+    ],
     sortOrder: 5,
     bundleOf: { packageId: 'pkg-monthly-nutrition-care', months: 6 },
     catalogVersion: CATALOG_VERSION,
   },
 ];
+
+/**
+ * The condition programs as purchasable plans: one record per length (1 month, plus 3 and 6 months where
+ * offered), grouped like Nutrition Care. Assessment-first programs aren't sold online.
+ */
+export const PROGRAM_PACKAGES: NutritionPackage[] = NUTRITION_SERVICES.filter((svc) => !svc.assessmentFirst && svc.priceInr).flatMap(
+  (svc, i): NutritionPackage[] => {
+    const baseId = `prog-${svc.id.replace(/^service-/, '')}`;
+    const lengths: Array<[number, number | undefined]> = [
+      [1, svc.priceInr],
+      [3, svc.quarterlyPriceInr],
+      [6, svc.halfYearlyPriceInr],
+    ];
+    return lengths
+      .filter(([, price]) => !!price)
+      .map(([months, price]) => {
+        const consultations = (svc.consultations ?? 0) * months;
+        return {
+          id: months === 1 ? baseId : `${baseId}-${months}m`,
+          title: months === 1 ? svc.title : `${svc.title} (${months} months)`,
+          priceInr: price!,
+          durationLabel: `${months === 1 ? '30 days' : `${months} months`} · ${consultations} consultations`,
+          validityDays: months * 30,
+          isActive: true,
+          tagline: svc.tagline,
+          description: svc.dietaryPhilosophy,
+          inclusions: [`${consultations} consultations with Dt. Anchal`, ...svc.whatIsIncluded],
+          terms: `Renew in your last 7 days and get 7 extra days free. ${PROMISE}`,
+          category: 'specialized',
+          serviceId: svc.id,
+          sortOrder: 100 + i,
+          ...(months === 1 ? { familyTitle: svc.title } : { bundleOf: { packageId: baseId, months } }),
+          catalogVersion: CATALOG_VERSION,
+        };
+      });
+  }
+);
+
+/** Everything seeded into the price list: the core plans and the condition programs. */
+export const SEED_PACKAGES: NutritionPackage[] = [...INITIAL_PACKAGES, ...PROGRAM_PACKAGES];
 
 export const INITIAL_PAYMENTS: PackagePayment[] = [
   {

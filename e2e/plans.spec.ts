@@ -48,23 +48,23 @@ test('My Plans: current plan, then a downgrade scheduled for when it ends (and c
   await expect(planCard(page, 'Nutrition Care')).toContainText('Your current plan');
 
   // Cheaper plans are a downgrade at the end of the current plan; nothing is charged now.
-  await planCard(page, 'Starter Consultation').getByRole('button', { name: 'Switch to this when my plan ends' }).click();
-  const dialog = page.getByRole('dialog', { name: /Switch to Starter Consultation/ });
+  await planCard(page, 'First Consultation').getByRole('button', { name: 'Switch to this when my plan ends' }).click();
+  const dialog = page.getByRole('dialog', { name: /Switch to First Consultation/ });
   await expect(dialog).toContainText('Nothing is charged now');
   await dialog.getByRole('button', { name: 'Confirm change' }).click();
-  await expect(page.getByText(/Switching to Starter Consultation on \d{4}-\d{2}-\d{2}/)).toBeVisible();
-  await expect(planCard(page, 'Starter Consultation')).toContainText(/Starts \d{4}-\d{2}-\d{2}/);
+  await expect(page.getByText(/Switching to First Consultation on \d{4}-\d{2}-\d{2}/)).toBeVisible();
+  await expect(planCard(page, 'First Consultation')).toContainText(/Starts \d{4}-\d{2}-\d{2}/);
 
   // Survives a reload (saved on the profile), and can be cancelled.
   await page.reload();
   await nav(page, 'My Plans');
-  await expect(page.getByText(/Switching to Starter Consultation/)).toBeVisible();
+  await expect(page.getByText(/Switching to First Consultation/)).toBeVisible();
   await page.getByRole('button', { name: 'Cancel change' }).click();
   await expect(page.getByText(/Switching to/)).toHaveCount(0);
-  await expect(planCard(page, 'Starter Consultation').getByRole('button', { name: 'Switch to this when my plan ends' })).toBeVisible();
+  await expect(planCard(page, 'First Consultation').getByRole('button', { name: 'Switch to this when my plan ends' })).toBeVisible();
 });
 
-test('Starter Consultation: ₹499 is credited in full when moving up to Monthly Nutrition Care', async ({ page }) => {
+test('First Consultation: ₹499 is credited in full when moving up to Monthly Nutrition Care', async ({ page }) => {
   await newVerifiedPatient(page);
   await nav(page, 'My Plans');
   // The promises are shown before anyone pays.
@@ -77,13 +77,13 @@ test('Starter Consultation: ₹499 is credited in full when moving up to Monthly
   await careFor(page, 1);
   await expect(care).toContainText('Choose 6 months and save 27%');
 
-  await buy(page, 'Starter Consultation', /Choose this plan/, 'Pay ₹499 & Activate Package');
+  await buy(page, 'First Consultation', /Choose this plan/, 'Pay ₹499 & Activate Package');
   await expect(page.getByText('You have ₹499 credit')).toBeVisible();
   await expect(await careFor(page, 1)).toContainText('Pay ₹2,000 today after ₹499 credit');
 
   await (await careFor(page, 1)).getByRole('button', { name: /Upgrade · pay ₹2,000/ }).click();
   const checkout = page.locator('div.fixed.inset-0').filter({ hasText: 'Secure Payment Gateway' });
-  await expect(checkout).toContainText('Your Starter Consultation (credited in full)');
+  await expect(checkout).toContainText('Your First Consultation (credited in full)');
   await checkout.getByRole('textbox').first().fill('meera@okhdfcbank');
   await checkout.getByRole('button', { name: 'Pay ₹2000 & Upgrade Plan' }).click();
   await expect(checkout.getByText('Payment Successful!')).toBeVisible();

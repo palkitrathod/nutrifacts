@@ -83,10 +83,9 @@ test('opening a page from the bottom of the home page starts at its top; Back re
   await expect.poll(() => page.evaluate(() => Math.round(scrollY))).toBe(homeY);
 });
 
-test('all 15 programs are listed in 4 categories, each with an icon that matches what it is', async ({ page }) => {
+test('all 12 condition programs are listed in 3 categories, each with an icon that matches what it is', async ({ page }) => {
   await page.goto('/');
   const categories: Record<string, Record<string, string>> = {
-    'Everyday Wellness': { 'Lifestyle Reset': 'lucide-sunrise', 'Weight Management': 'icon-weighing-scale', "Women's Wellness": 'lucide-venus' },
     'Lifestyle Conditions': { 'Lifestyle Diseases': 'lucide-activity', 'Healthy Heart with Comorbidities': 'lucide-heart-pulse', 'Anemia & Iron': 'lucide-droplets' },
     'Specialised Care': {
       'Liver Health': 'lucide-citrus',
@@ -108,7 +107,7 @@ test('all 15 programs are listed in 4 categories, each with an icon that matches
       total++;
     }
   }
-  expect(total).toBe(15);
+  expect(total).toBe(12);
   // Assessment-first programs show no online price.
   await expect(page.locator('#services').getByRole('article', { name: 'Oncology Nutrition Support' })).toContainText('Personalised plan & quote');
 });

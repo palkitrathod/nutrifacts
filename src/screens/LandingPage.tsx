@@ -25,11 +25,13 @@ import {
 import { Link, useLocation } from 'react-router';
 import { IMAGES, NUTRITION_SERVICES } from '../data/mockData';
 import { usePublicPackages } from '../data/usePublicPackages';
-import { PlanCard, WinWinStrip, planFamilies } from '../components/PlanCard';
-import { CLINICAL_DISCLAIMER, SERVICE_GROUPS, ServiceCard, ServiceDetailsDialog, ServiceGroupTabs } from '../components/ServiceCatalog';
+import { PlanCard, PlanComparison, WinWinStrip, planFamilies } from '../components/PlanCard';
+import { WhyChooseSection } from '../components/WhyChoose';
+import { CLINICAL_DISCLAIMER, SERVICE_GROUPS, ServiceCard, ServiceDetailsDialog, ServiceGroupTabs, programPackage } from '../components/ServiceCatalog';
 import type { NutritionService, ServiceGroup } from '../types/nutrition';
 import { ServiceIcon, serviceTheme } from '../components/ServiceIcon';
 import { useAuth } from '../auth/AuthContext';
+import { FIRST_CONSULTATION_INR, FOLLOW_UP_INR } from '../shared/pricing';
 
 const NAV_LINKS = [
   { label: 'Services', id: 'services' },
@@ -73,7 +75,7 @@ const HOW_IT_WORKS = [
   {
     step: '01',
     title: 'Book Your Consultation',
-    desc: 'Schedule a 30-minute intake session — online video or in-clinic. Available at just ₹500 for your first visit.',
+    desc: `Schedule a 30-minute intake session — online video or in-clinic. Your first consultation is ₹${FIRST_CONSULTATION_INR}, credited in full if you continue with a plan.`,
     icon: <Calendar className="w-6 h-6" />,
   },
   {
@@ -99,19 +101,28 @@ export const LandingPage: React.FC = () => {
   // Sign-up isn't finished until the emailed code is entered: until then, no dashboard link.
   const signedIn = status === 'authenticated' && !!user?.emailVerified;
   const { packages: livePackages, failed: pricingFailed } = usePublicPackages();
-  const [serviceGroup, setServiceGroup] = useState<ServiceGroup>('everyday');
+  const [serviceGroup, setServiceGroup] = useState<ServiceGroup>('conditions');
   const [lengthChoice, setLengthChoice] = useState<Record<string, string>>({});
+  const [goalChoice, setGoalChoice] = useState<Record<string, string>>({});
   const [openService, setOpenService] = useState<NutritionService | null>(null);
-  /** Booking a program (with the length picked on its card, e.g. "Lifestyle Diseases (3 months)"). */
-  const serviceAction = (svc: NutritionService, where: 'card' | 'dialog', months = 1) => (
-    <Link
-      to={signedIn ? '/app' : `/signup?service=${encodeURIComponent(svc.id)}`}
-      state={signedIn ? { bookService: months > 1 ? `${svc.title} (${months} months)` : svc.title } : undefined}
-      className={`py-2 rounded-xl text-xs font-semibold bg-[#3E6553] hover:bg-[#2D4C3C] text-white flex items-center justify-center gap-1 ${where === 'dialog' ? 'px-5 py-2.5' : ''}`}
-    >
-      {svc.assessmentFirst ? 'Book assessment' : 'Book this program'} <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
-    </Link>
-  );
+  const plans = livePackages?.filter((p) => !p.serviceId);
+  /**
+   * A program's button: choose it (for the length picked on its card) and pay online after signing up, or,
+   * for medical programs priced after an assessment, start with the First Consultation.
+   */
+  const serviceAction = (svc: NutritionService, where: 'card' | 'dialog', months = 1) => {
+    const pkg = svc.assessmentFirst ? undefined : programPackage(svc.id, months, livePackages ?? undefined);
+    const planId = pkg?.id ?? 'pkg-basic-consultation';
+    return (
+      <Link
+        to={signedIn ? '/app' : `/signup?plan=${encodeURIComponent(planId)}`}
+        state={signedIn ? { openTab: 'plans' } : undefined}
+        className={`py-2 rounded-xl text-xs font-semibold bg-[#3E6553] hover:bg-[#2D4C3C] text-white flex items-center justify-center gap-1 ${where === 'dialog' ? 'px-5 py-2.5' : ''}`}
+      >
+        {pkg ? `Choose · ₹${pkg.priceInr.toLocaleString('en-IN')}` : 'Book first consultation'} <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
+      </Link>
+    );
+  };
 
   // Layout effect: decided before the first paint, so after a refresh mid-page the navbar doesn't
   // flash transparent and then turn white.
@@ -342,7 +353,7 @@ export const LandingPage: React.FC = () => {
 
               {/* Pricing hint */}
               <p className="text-emerald-200/70 text-xs">
-                First consultation from <strong className="text-emerald-200">₹500</strong> · Follow-ups at <strong className="text-emerald-200">₹300</strong> · No hidden fees
+                First consultation <strong className="text-emerald-200">₹{FIRST_CONSULTATION_INR}</strong>, credited to your plan · Follow-ups <strong className="text-emerald-200">₹{FOLLOW_UP_INR}</strong> · No hidden fees
               </p>
             </div>
 
@@ -421,10 +432,10 @@ export const LandingPage: React.FC = () => {
             </span>
             <h2 className="text-3xl sm:text-4xl font-bold text-[#2D4C3C] mt-2"
                 style={{ fontFamily: "'Playfair Display', serif" }}>
-              15 Programs, One Personal Approach
+              Condition Programs, Fully Priced
             </h2>
             <p className="mt-4 text-slate-500 max-w-xl mx-auto text-sm leading-relaxed">
-              From everyday habits to clinical conditions: every program is built around your goals, food preferences, routine and reports.
+              For diabetes, thyroid, PCOS, heart, liver, gut, kidney and more. Every program is built around your reports, routine and food, and you can see its full price before you start.
             </p>
           </div>
 
@@ -434,7 +445,7 @@ export const LandingPage: React.FC = () => {
           {/* Program grid */}
           <div id={`programs-${serviceGroup}`} role="tabpanel" aria-labelledby={`programs-tab-${serviceGroup}`} className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
             {NUTRITION_SERVICES.filter((svc) => svc.group === serviceGroup).map((svc) => (
-              <ServiceCard key={svc.id} svc={svc} onDetails={() => setOpenService(svc)} action={(months) => serviceAction(svc, 'card', months)} />
+              <ServiceCard key={svc.id} svc={svc} packages={livePackages ?? undefined} onDetails={() => setOpenService(svc)} action={(months) => serviceAction(svc, 'card', months)} />
             ))}
           </div>
 
@@ -446,7 +457,7 @@ export const LandingPage: React.FC = () => {
       </section>
 
       {openService && (
-        <ServiceDetailsDialog svc={openService} onClose={() => setOpenService(null)} action={serviceAction(openService, 'dialog')} />
+        <ServiceDetailsDialog svc={openService} packages={livePackages ?? undefined} onClose={() => setOpenService(null)} action={serviceAction(openService, 'dialog')} />
       )}
 
       {/* ══ ABOUT / DIETITIAN ═════════════════════════════════════════ */}
@@ -582,6 +593,8 @@ export const LandingPage: React.FC = () => {
         </div>
       </section>
 
+      <WhyChooseSection />
+
       {/* ══ PRICING ════════════════════════════════════════════════════ */}
       <section id="pricing" className="scroll-mt-16 py-20 lg:py-28 bg-white">
         <div className="max-w-6xl 2xl:max-w-7xl mx-auto px-5 sm:px-8">
@@ -602,7 +615,7 @@ export const LandingPage: React.FC = () => {
 
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 pt-3">
             {!livePackages && !pricingFailed && [0, 1, 2].map(i => (
-              <div key={i} className="rounded-2xl border border-slate-200 p-6 min-h-[600px] lg:min-h-[700px] animate-pulse bg-slate-50" aria-hidden="true" />
+              <div key={i} className="rounded-2xl border border-slate-200 p-6 min-h-[600px] lg:min-h-[1140px] animate-pulse bg-slate-50" aria-hidden="true" />
             ))}
             {pricingFailed && (
               <p className="md:col-span-2 lg:col-span-3 text-center text-sm text-slate-500" role="status">
@@ -611,17 +624,19 @@ export const LandingPage: React.FC = () => {
                 for current pricing.
               </p>
             )}
-            {livePackages && planFamilies(livePackages).map(family => {
+            {plans && planFamilies(plans).map(family => {
               const pkg = family.find(p => p.id === lengthChoice[family[0].id]) ?? family.find(p => p.bundleOf?.months === 3) ?? family[0];
               return (
               <PlanCard
                 key={family[0].id}
                 pkg={pkg}
-                all={livePackages}
+                all={plans}
                 family={family}
                 onSelectLength={p => setLengthChoice(c => ({ ...c, [family[0].id]: p.id }))}
+                goal={goalChoice[family[0].id]}
+                onSelectGoal={g => setGoalChoice(c => ({ ...c, [family[0].id]: g }))}
                 dark={family.some(p => p.isPopular)}
-                className="lg:min-h-[700px]"
+                className="lg:min-h-[1140px]"
                 footer={
                   <Link
                     to={signedIn ? '/app' : `/signup?plan=${encodeURIComponent(pkg.id)}`}
@@ -637,6 +652,8 @@ export const LandingPage: React.FC = () => {
               );
             })}
           </div>
+
+          {plans && <PlanComparison plans={plans} className="mt-10" />}
 
           <p className="text-center text-xs text-slate-400 mt-8">
             UPI · Cards · Net Banking accepted · All payments fully secure

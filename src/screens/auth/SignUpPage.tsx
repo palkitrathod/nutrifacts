@@ -14,11 +14,12 @@ import { IMAGES, NUTRITION_SERVICES } from '../../data/mockData';
 import { usePublicPackages } from '../../data/usePublicPackages';
 import { AsidePhoto, AuthLayout, usePageTitle } from './AuthLayout';
 import { FormAlert, SubmitButton, TextField, safeNextPath } from './AuthFields';
+import { FIRST_CONSULTATION_INR } from '../../shared/pricing';
 
 type Field = keyof SignUpInput | 'confirmPassword' | 'acceptedTerms';
 
 const STEPS = [
-  { icon: Calendar, title: 'Book your first consultation', desc: '30-minute intake, online or in-clinic — from ₹500.' },
+  { icon: Calendar, title: 'Book your first consultation', desc: `30-minute intake, online or in-clinic: ₹${FIRST_CONSULTATION_INR}, credited to your plan.` },
   { icon: Utensils, title: 'Get your personal diet chart', desc: 'Built around your reports, routine and home kitchen.' },
   { icon: TrendingUp, title: 'Track progress together', desc: 'Log meals and weight; follow-ups adjust your plan.' },
 ];

@@ -187,7 +187,7 @@ export interface Appointment {
   patientName: string;
   patientPhone: string;
   consultationType: ConsultationType;
-  consultationTier: ConsultationTier; // First consultation: ₹500, Follow-up: ₹300
+  consultationTier: ConsultationTier;
   consultationFeeInr: number;
   serviceCategory: string;
   date: string;
@@ -271,10 +271,31 @@ export interface NutritionPackage {
   bundleOf?: { packageId: string; months: number };
   /** On a plan with longer bundles: the name of the card that offers all its lengths (e.g. "Nutrition Care"). */
   familyTitle?: string;
+  /** Goals a customer can choose for this plan (e.g. better habits, weight, women's wellness). Set on the base plan. */
+  goals?: PlanGoal[];
+  /** Where the plan sits on the customer's journey, e.g. "Step 1 · Try". */
+  step?: string;
+  /** Who the plan suits, in the customer's words ("You want expert advice before committing"). */
+  bestFor?: string;
+  /** Two or three headline facts from the inclusions, shown large ("12" · "sessions with Dt. Anchal"). */
+  stats?: Array<{ value: string; label: string }>;
+  /** What happens after buying, in order ("How it works"). */
+  journey?: string[];
+  /** A condition program (from the program catalogue) sold online: the program's id. Plans have none. */
+  serviceId?: string;
   /** Plainly stated limits ("Good to know"), so nobody buys the wrong plan. */
   notIncluded?: string[];
   /** Version of the clinic's own catalogue entry; plans the dietitian creates have none. */
   catalogVersion?: number;
+}
+
+export interface PlanGoal {
+  id: string;
+  label: string;
+  /** Icon name understood by ServiceIcon. */
+  iconName: string;
+  /** What is specific to this goal (from the program brief). */
+  highlights: string[];
 }
 
 export interface PackagePayment {
@@ -304,4 +325,6 @@ export interface PackagePayment {
   renewalOfPaymentId?: string;
   /** Refunds: the amount returned (paid − consultations used − processing charges, or as set by the clinic). */
   refundAmountInr?: number;
+  /** The goal the customer chose for a plan with goals (e.g. "Weight goal"). */
+  goal?: string;
 }

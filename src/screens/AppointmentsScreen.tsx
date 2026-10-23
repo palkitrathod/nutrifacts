@@ -20,6 +20,7 @@ import {
 import { useNutrition } from '../context/NutritionContext';
 import { Appointment } from '../types/nutrition';
 import { WhatsAppButton } from '../components/WhatsAppButton';
+import { FIRST_CONSULTATION_INR, FOLLOW_UP_INR } from '../shared/pricing';
 
 interface AppointmentsScreenProps {
   onOpenBookModal: () => void;
@@ -95,13 +96,13 @@ export const AppointmentsScreen: React.FC<AppointmentsScreenProps> = ({ onOpenBo
 
           <div className="flex items-center gap-2 shrink-0">
             <div className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-center">
-              <span className="text-[10px] text-slate-500 block uppercase font-medium">First Session</span>
-              <span className="text-sm font-bold font-mono text-[#3E6553]">₹500</span>
+              <span className="text-[10px] text-slate-500 block uppercase font-medium">First Consultation</span>
+              <span className="text-sm font-bold font-mono text-[#3E6553]">₹{FIRST_CONSULTATION_INR}</span>
               <span className="text-[9px] text-slate-400 block">Health & Diet Intake</span>
             </div>
             <div className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-center">
               <span className="text-[10px] text-slate-500 block uppercase font-medium">Follow-ups</span>
-              <span className="text-sm font-bold font-mono text-[#3E6553]">₹300</span>
+              <span className="text-sm font-bold font-mono text-[#3E6553]">₹{FOLLOW_UP_INR}</span>
               <span className="text-[9px] text-slate-400 block">Progress & Diet Updates</span>
             </div>
           </div>
@@ -166,7 +167,7 @@ export const AppointmentsScreen: React.FC<AppointmentsScreenProps> = ({ onOpenBo
         ) : (
           filteredList.map((appt) => {
             const isFirst = appt.consultationTier === 'first_consultation';
-            const fee = appt.consultationFeeInr || (isFirst ? 500 : 300);
+            const fee = appt.consultationFeeInr ?? (isFirst ? FIRST_CONSULTATION_INR : FOLLOW_UP_INR);
 
             return (
               <div

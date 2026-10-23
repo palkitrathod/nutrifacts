@@ -25,13 +25,14 @@ import { ServiceIcon, serviceTheme } from '../components/ServiceIcon';
 import { lengthSaving, planFamilies, planHook, planIcon, sortPlans } from '../components/PlanCard';
 import { IMAGES } from '../data/mockData';
 import { NutritionService, NutritionPackage, ServiceGroup } from '../types/nutrition';
-import { ServiceCard, ServiceDetailsDialog, ServiceGroupTabs } from '../components/ServiceCatalog';
+import { ServiceCard, ServiceDetailsDialog, ServiceGroupTabs, programPackage } from '../components/ServiceCatalog';
+import { FIRST_CONSULTATION_INR, FOLLOW_UP_INR } from '../shared/pricing';
 
 interface HomeScreenProps {
   onNavigateTab: (tab: string) => void;
   onOpenBookAppointment: (serviceTitle?: string) => void;
   onOpenPdfChart: () => void;
-  onOpenCheckout?: (pkg: NutritionPackage) => void;
+  onOpenCheckout?: (pkg: NutritionPackage, goal?: string) => void;
 }
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
@@ -52,11 +53,33 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     patients,
     appointments,
   } = useNutrition();
-  const homePlans = sortPlans(packages.filter((p) => p.isActive));
+  // Condition programs have their own section below.
+  const homePlans = sortPlans(packages.filter((p) => p.isActive && !p.serviceId));
   const [lengthChoice, setLengthChoice] = useState<Record<string, string>>({});
+  const [goalChoice, setGoalChoice] = useState<Record<string, string>>({});
 
   const [selectedService, setSelectedService] = useState<NutritionService | null>(null);
-  const [serviceGroup, setServiceGroup] = useState<ServiceGroup>('everyday');
+  const [serviceGroup, setServiceGroup] = useState<ServiceGroup>('conditions');
+
+  /** Choose a program and pay online, or (medical programs, priced after an assessment) book the First Consultation. */
+  const programAction = (svc: NutritionService, months: number, where: 'card' | 'dialog' = 'card') => {
+    const pkg = svc.assessmentFirst ? undefined : programPackage(svc.id, months, packages);
+    const Icon = pkg ? CreditCard : Calendar;
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setSelectedService(null);
+          if (pkg && onOpenCheckout) onOpenCheckout(pkg);
+          else if (pkg) onNavigateTab('plans');
+          else onOpenBookAppointment(svc.title);
+        }}
+        className={`rounded-xl text-xs font-semibold bg-[#3E6553] hover:bg-[#2D4C3C] text-white flex items-center justify-center gap-1 ${where === 'dialog' ? 'px-5 py-2.5 shadow-sm' : 'py-2'}`}
+      >
+        <Icon className="w-3.5 h-3.5" aria-hidden="true" /> {pkg ? `Choose · ₹${pkg.priceInr.toLocaleString('en-IN')}` : 'Book first consultation'}
+      </button>
+    );
+  };
 
   const currentChart = getCurrentUserDietChart();
   const todayKey = currentUser.id;
@@ -157,8 +180,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               onClick={() => onOpenBookAppointment()}
               className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-left transition-colors cursor-pointer"
             >
-              <span className="text-[10px] text-slate-500 block uppercase font-medium">First Session</span>
-              <span className="text-sm font-bold font-mono text-[#3E6553]">₹500</span>
+              <span className="text-[10px] text-slate-500 block uppercase font-medium">First Consultation</span>
+              <span className="text-sm font-bold font-mono text-[#3E6553]">₹{FIRST_CONSULTATION_INR}</span>
               <span className="text-[9px] text-slate-500 block">Health & Diet Intake</span>
             </button>
 
@@ -168,7 +191,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-left transition-colors cursor-pointer"
             >
               <span className="text-[10px] text-slate-500 block uppercase font-medium">Follow-ups</span>
-              <span className="text-sm font-bold font-mono text-[#3E6553]">₹300</span>
+              <span className="text-sm font-bold font-mono text-[#3E6553]">₹{FOLLOW_UP_INR}</span>
               <span className="text-[9px] text-slate-500 block">Progress & Updates</span>
             </button>
           </div>
@@ -506,6 +529,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             // A plan offered in several lengths is "Most popular"; "Best value" is shown on its longest length instead.
             const bestValue = !withLengths && !!pkg.isBestValue;
             const highlighted = bestValue || family.some((p) => p.isPopular);
+            const goals = family[0].goals;
+            const goal = goals?.find((g) => g.label === goalChoice[family[0].id]) ?? goals?.[0];
             return (
               <div
                 key={family[0].id}
@@ -555,6 +580,26 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     </div>
                   )}
 
+                  {goals && goals.length > 1 && (
+                    <div role="radiogroup" aria-label="What's your goal?" className="flex flex-wrap gap-1">
+                      {goals.map((g) => {
+                        const active = g.id === goal?.id;
+                        return (
+                          <button
+                            key={g.id}
+                            type="button"
+                            role="radio"
+                            aria-checked={active}
+                            onClick={() => setGoalChoice((c) => ({ ...c, [family[0].id]: g.label }))}
+                            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold transition-colors ${active ? 'border-[#3E6553] bg-[#3E6553] text-white' : 'border-slate-200 text-slate-600 hover:border-emerald-300'}`}
+                          >
+                            {g.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   <div className="flex flex-wrap items-baseline gap-x-1.5">
                     <span className="text-2xl font-bold text-[#2D4C3C]" style={{ fontFamily: "'Playfair Display', serif" }}>
                       ₹{pkg.priceInr.toLocaleString('en-IN')}
@@ -573,7 +618,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   </p>
 
                   <ul className="space-y-1 text-[11px] text-slate-600">
-                    {pkg.inclusions.slice(0, 2).map((inc, i) => (
+                    {(goal ? goal.highlights : pkg.inclusions).slice(0, 2).map((inc, i) => (
                       <li key={i} className="flex items-start gap-1.5">
                         <CircleCheck className="w-3.5 h-3.5 text-[#3E6553] shrink-0 mt-px" aria-hidden="true" />
                         <span>{inc}</span>
@@ -586,7 +631,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      if (onOpenCheckout) onOpenCheckout(pkg);
+                      if (onOpenCheckout) onOpenCheckout(pkg, goal?.label);
                       else onNavigateTab('plans');
                     }}
                     className={`w-full py-2.5 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 transition-all ${
@@ -609,8 +654,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       {/* @container: columns follow the space the app actually has, not the window. */}
       <section className="@container space-y-3 pt-2">
         <div>
-          <h2 className="text-base font-bold text-slate-900 tracking-tight">Nutrition Programs</h2>
-          <p className="text-xs text-slate-500">15 programs built around your goals, food preferences, routine and reports</p>
+          <h2 className="text-base font-bold text-slate-900 tracking-tight">Condition Programs</h2>
+          <p className="text-xs text-slate-500">Diet care for a health condition, built around your reports, routine and food. Pay online, or start with a First Consultation.</p>
         </div>
 
         <ServiceGroupTabs value={serviceGroup} onChange={setServiceGroup} services={services} />
@@ -622,16 +667,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               <ServiceCard
                 key={svc.id}
                 svc={svc}
+                packages={packages}
                 onDetails={() => setSelectedService(svc)}
-                action={(months) => (
-                  <button
-                    type="button"
-                    onClick={() => onOpenBookAppointment(months > 1 ? `${svc.title} (${months} months)` : svc.title)}
-                    className="py-2 rounded-xl text-xs font-semibold bg-[#3E6553] hover:bg-[#2D4C3C] text-white flex items-center justify-center gap-1"
-                  >
-                    <Calendar className="w-3.5 h-3.5" aria-hidden="true" /> {svc.assessmentFirst ? 'Book assessment' : 'Book'}
-                  </button>
-                )}
+                action={(months) => programAction(svc, months)}
               />
             ))}
         </div>
@@ -641,20 +679,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         <ServiceDetailsDialog
           svc={selectedService}
           onClose={() => setSelectedService(null)}
-          action={
-            <button
-              type="button"
-              onClick={() => {
-                const svc = selectedService.title;
-                setSelectedService(null);
-                onOpenBookAppointment(svc);
-              }}
-              className="px-5 py-2.5 rounded-xl bg-[#3E6553] hover:bg-[#2D4C3C] text-white font-semibold text-xs flex items-center gap-1.5 shadow-sm"
-            >
-              <Calendar className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Book Consultation</span>
-            </button>
-          }
+          packages={packages}
+          action={programAction(selectedService, 1, 'dialog')}
         />
       )}
 

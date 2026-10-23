@@ -154,6 +154,7 @@ export const PaymentReceiptModal: React.FC<PaymentReceiptModalProps> = ({ paymen
                 <tr>
                   <td className="py-3 px-3 sm:px-4">
                     <p className="font-bold text-slate-900">{payment.packageTitle}</p>
+                    {payment.goal && <p className="text-[11px] font-semibold text-emerald-800">Goal: {payment.goal}</p>}
                     <p className="text-[11px] text-slate-600 font-mono sm:hidden">Until {payment.validUntil}</p>
                     <p className="text-[11px] text-slate-500">
                       Personalized clinical diet care, scheduled consultations, and biometric tracking.

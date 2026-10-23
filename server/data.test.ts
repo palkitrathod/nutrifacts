@@ -182,6 +182,27 @@ describe('writing data', () => {
       expect(res.status).toBe(400);
     });
 
+    it('accepts Nutrition Care bought for one of its goals (any length), and nothing else as a goal', async () => {
+      const priya = await signIn(PRIYA);
+      const plans = (await priya.load()).packages;
+      const monthly = plans.find((p: any) => p.id === 'pkg-monthly-nutrition-care');
+      const quarterly = plans.find((p: any) => p.id === 'pkg-quarterly-nutrition-care');
+      const goal = monthly.goals[1].label;
+      expect((await priya.save([{ collection: 'payments', id: 'pay-goal', data: payment(monthly, { id: 'pay-goal', goal }) }])).status).toBe(200);
+      expect((await priya.save([{ collection: 'payments', id: 'pay-goal3', data: payment(quarterly, { id: 'pay-goal3', goal }) }])).status).toBe(200);
+      expect((await priya.save([{ collection: 'payments', id: 'pay-bad', data: payment(monthly, { id: 'pay-bad', goal: 'Free gym' }) }])).status).toBe(400);
+      const diet = plans.find((p: any) => p.id === 'pkg-personalized-diet-plan');
+      expect((await priya.save([{ collection: 'payments', id: 'pay-bad', data: payment(diet, { id: 'pay-bad', goal }) }])).status).toBe(400);
+    });
+
+    it('sells condition programs online at their listed price', async () => {
+      const priya = await signIn(PRIYA);
+      const program = (await priya.load()).packages.find((p: any) => p.id === 'prog-lifestyle-diseases-3m');
+      expect(program).toMatchObject({ serviceId: 'service-lifestyle-diseases', validityDays: 90, isActive: true });
+      expect((await priya.save([{ collection: 'payments', id: 'pay-prog', data: payment(program, { id: 'pay-prog', amountInr: program.priceInr - 500 }) }])).status).toBe(400);
+      expect((await priya.save([{ collection: 'payments', id: 'pay-prog', data: payment(program, { id: 'pay-prog' }) }])).status).toBe(200);
+    });
+
     describe('upgrades', () => {
       // Priya's seeded plan: Monthly Nutrition Care, ₹2499, 2026-10-10 → 2026-11-10 (32 days).
       // On 2026-10-22, 20 days are left: credit ⌊2499 × 20 / 32⌋ = ₹1561.
@@ -232,7 +253,7 @@ describe('writing data', () => {
         expect((await priya.save([{ collection: 'payments', id: 'pay-test', data: upgrade() }])).status).toBe(400);
       });
 
-      it('credits a Starter Consultation in full towards a bigger plan', async () => {
+      it('credits the First Consultation in full towards a bigger plan', async () => {
         const priya = await signIn(PRIYA);
         const plans = (await priya.load()).packages;
         const starter = plans.find((p: any) => p.id === 'pkg-basic-consultation');
@@ -384,7 +405,7 @@ describe('production seeding', () => {
     put('pkg-custom', { id: 'pkg-custom', title: 'Clinic’s own plan', priceInr: 1234, isActive: true });
     seedData(old, { demoRecords: false });
     const pkg = (id: string) => JSON.parse((old.prepare("SELECT data FROM records WHERE collection = 'packages' AND id = ?").get(id) as { data: string }).data);
-    expect(pkg('pkg-basic-consultation')).toMatchObject({ title: 'Starter Consultation', priceInr: 549, isActive: false, creditInFull: true });
+    expect(pkg('pkg-basic-consultation')).toMatchObject({ title: 'First Consultation', priceInr: 549, isActive: false, creditInFull: true });
     expect(pkg('pkg-quarterly-nutrition-care')).toMatchObject({ priceInr: 5999, validityDays: 90 });
     expect(pkg('pkg-custom')).toEqual({ id: 'pkg-custom', title: 'Clinic’s own plan', priceInr: 1234, isActive: true });
     // Running it again changes nothing.
